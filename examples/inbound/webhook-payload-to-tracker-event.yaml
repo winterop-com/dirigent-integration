@@ -1,0 +1,176 @@
+# An event posted by an outside system, landing in DHIS2 the moment it is captured.
+#
+# The other examples on this shelf poll or wait. This one is pushed: a mobile capture app,
+# an EMR, a lab middleware POSTs one encounter to this pipeline's webhook and the run starts
+# with that encounter already in its parameters. Nothing is scheduled and nothing is
+# scanned.
+#
+# WHERE THIS LANDS, AND WHY IT IS NOT A TRACKER EVENT. An event-shaped capture is what
+# arrives, but `dhis2.tracker` in this pack READS `/api/tracker` -- tracked entities,
+# enrollments, events -- and has no write side, so there is nothing to hand an event to
+# today. The encounter is therefore summed into the aggregate figures it contributes to and
+# imported as a data value set, which is what an aggregate DHIS2 wants from an event stream
+# anyway. When a tracker write block lands, only the reshape and the import change; the
+# intake, the mapping table and the guard do not.
+#
+# The hops, and the shape at each one:
+#
+#   1. the POST     -> {encounter: {facility, occurred_at, items: [{code, quantity}]}}
+#   2. the mapping  -> three params, each one path into that body and nothing else
+#   3. reshape      -> {dataValues: [{dataElement, period, orgUnit, value}]}, one value per
+#                      distinct item code, quantities summed
+#   4. gate         -> the same, refused unless the ids and the period are DHIS2's own
+#   5. import       -> the instance's summary
+#
+# THE MAPPING IS THE WHOLE SECURITY BOUNDARY. A caller reaches exactly the three parameters
+# named under params_from_payload, and each mapped value is validated against the params
+# schema like any other run's. A payload carrying a connection code, a dry_run: false, or a
+# different org unit reaches none of them, because none of them is mapped.
+#
+# The period is derived rather than accepted. A capture knows when it happened; it does not
+# get to say which DHIS2 month it belongs to, because that is the receiving instance's
+# vocabulary and a caller that gets it wrong would silently write into the wrong month.
+#
+# Locally, the payload is supplied as parameters, which is exactly what a delivery does:
+#
+#   dg run --local examples/inbound/webhook-payload-to-tracker-event.yaml \
+#     -p facility=DiszpKrYNg8 -p occurred_at=2026-06-14T09:20:00Z
+#
+# Against an instance, where the endpoint exists:
+#
+#   dg apply examples/inbound/webhook-payload-to-tracker-event.yaml
+#   dg webhook rotate-token webhook-payload-to-tracker-event capture-posted
+#   curl -X POST "$DG_URL/hooks/$TOKEN" -d '{"encounter": {
+#     "facility": "DiszpKrYNg8", "occurred_at": "2026-06-14T09:20:00Z",
+#     "items": [{"code": "EXPOSED_REGISTERED", "quantity": 2}]}}'
+
+format: dirigent/v1
+kind: pipeline
+code: webhook-payload-to-tracker-event
+name: A pushed encounter into DHIS2
+description: |
+  An outside system POSTs one captured encounter; the run reshapes it into a DHIS2 data
+  value set and imports it.
+
+  The pack's `dhis2.tracker` block reads `/api/tracker` and does not write it, so an
+  event-shaped capture lands as the aggregate figures it contributes to.
+
+tags: [inbound, dhis2, webhook, transform, validate, cross-boundary]
+
+requires:
+  blocks:
+    - transform.jq
+    - validate.schema
+    - dhis2.data_value_set_import
+
+connections:
+  dhis2-demo:
+    kind: dhis2
+    config:
+      base_url: https://play.im.dhis2.org/stable-2-43-1
+      basic_username: admin
+      basic_password: district
+      timeout: 60s
+
+params:
+  type: object
+  properties:
+    facility:
+      type: string
+      description: The uid of the facility the encounter was captured at.
+      default: DiszpKrYNg8
+    occurred_at:
+      type: string
+      format: date-time
+      description: When the encounter happened, which is what the DHIS2 period is derived from.
+      default: "2026-06-14T09:20:00Z"
+    items:
+      type: array
+      description: What was given or done, in the sending system's own item codes.
+      default:
+        - { code: EXPOSED_REGISTERED, quantity: 2 }
+        - { code: NVP_WITHIN_72H, quantity: 1 }
+        - { code: EXPOSED_REGISTERED, quantity: 1 }
+      items:
+        type: object
+        required: [code, quantity]
+        properties:
+          code: { type: string }
+          quantity: { type: integer }
+    dry_run:
+      type: boolean
+      description: Whether the instance validates the import and writes nothing.
+      default: true
+
+schemas:
+  data-value-set:
+    type: object
+    required: [dataValues]
+    properties:
+      dataValues:
+        type: array
+        minItems: 1
+        items:
+          type: object
+          required: [dataElement, period, orgUnit, value]
+          properties:
+            dataElement: { type: string, format: dhis2-uid }
+            period: { type: string, format: dhis2-period }
+            orgUnit: { type: string, format: dhis2-uid }
+            value: { type: string }
+
+steps:
+  # One encounter can carry the same item twice -- two children registered in one visit --
+  # so the items are grouped and summed before they become data values. Importing them as
+  # two values would have the second silently replace the first rather than add to it.
+  reshape:
+    block: transform.jq
+    config:
+      input:
+        facility: "${params.facility}"
+        occurred_at: "${params.occurred_at}"
+        items: "${params.items}"
+        lookup:
+          EXPOSED_REGISTERED: x0PshcPLSk1
+          NVP_WITHIN_72H: wZqi8EXN5x4
+      program: |
+        .lookup as $lookup
+        | .facility as $ou
+        # A monthly DHIS2 period is YYYYMM, which is the first seven characters of an ISO
+        # instant with the dash taken out. The capture's own clock decides the month.
+        | (.occurred_at[0:7] | gsub("-"; "")) as $period
+        | {dataValues: [
+            .items
+            | group_by(.code)[]
+            | {dataElement: $lookup[.[0].code],
+               period: $period,
+               orgUnit: $ou,
+               value: ([.[].quantity] | add | tostring)}
+          ]}
+
+  # An item code the table does not know left dataElement null, and null is not a uid: the
+  # gate is what turns a sender's typo into a failed run instead of a refused import.
+  gate:
+    block: validate.schema
+    depends_on: [reshape]
+    config:
+      input: "${steps.reshape.output.value}"
+      schema: data-value-set
+
+  import:
+    block: dhis2.data_value_set_import
+    depends_on: [gate]
+    config:
+      connection: dhis2-demo
+      data_values: "${steps.gate.output.value}"
+      dry_run: "${params.dry_run}"
+
+triggers:
+  webhooks:
+    - code: capture-posted
+      name: One encounter, pushed
+      description: The capture app POSTs an encounter as it is recorded.
+      params_from_payload:
+        facility: "$.encounter.facility"
+        occurred_at: "$.encounter.occurred_at"
+        items: "$.encounter.items"

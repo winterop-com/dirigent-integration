@@ -1,0 +1,137 @@
+# A dated snapshot of the metadata a downstream system needs, and then the data that uses it.
+#
+# Every DHIS2 export is a pile of uids. What the uids mean -- which data element, which
+# facility, which category combination -- lives in metadata that changes underneath a
+# warehouse without warning. So a load that will still be readable in a year snapshots the
+# metadata beside the data, at the same moment, and this is that step. It spans dhis2 for the
+# reads, builtin for the reshape and the composition, and storage-s3 for where it lands, which
+# is why no single pack could own it.
+#
+# What happens, hop by hop:
+#
+#   collections  one dhis2.metadata read per resource named in params. The block resolves the
+#                instance's version on connect and reads through that version's accessor, so
+#                the same document reads a 2.42 or a 2.43 instance unchanged. Each answer is
+#                the collection under its own key: {"dataElements": [...]}.
+#   snapshot     the fan-out read back as one list and zipped against the resource names into a
+#                single document, {"dataElements": [...], "organisationUnits": [...]}, written
+#                straight to s3. One object, one fetch, everything a reader needs to resolve a
+#                uid.
+#   counts       the same list, counted: what each collection held on the day of the snapshot.
+#                This is the number worth alerting on -- a data element count that halved
+#                overnight is a broken credential, not a tidy-up.
+#   then_export  pipeline.run of dhis2-export-to-s3, the example beside this one. Composition
+#                is the point: the metadata is snapshotted first, the data is read second, and
+#                a reader of that data has the metadata that was true when it was read.
+#
+# To make it yours: change resources to the collections your consumers actually resolve, and
+# point pipeline at your own export. `wait: true` keeps this run open until the child settles,
+# so a failed export fails the snapshot run too; set it false to fire and forget. The child is
+# resolved by code on the instance, so it must be applied before this document runs -- which is
+# why it is not named in requires here, where a local validation holds no instance to check
+# against. Which connection backs s3:// is an instance setting (storage_connections: {s3: <code>}).
+#
+#   dg apply examples/dhis2-export-to-s3.yaml
+#   dg apply examples/dhis2-metadata-snapshot.yaml
+#   dg run dhis2-metadata-snapshot --watch
+
+format: dirigent/v1
+kind: pipeline
+code: dhis2-metadata-snapshot
+name: A metadata snapshot, then the data
+description: Snapshot DHIS2 metadata collections into S3, then run the export that uses them.
+
+tags: [dhis2, s3, composition, cross-boundary]
+
+requires:
+  blocks:
+    - dhis2.metadata
+    - transform.jq
+    - pipeline.run
+
+# The public DHIS2 play server, carried inline so this document runs standalone. An instance
+# you own names a connection it holds instead.
+connections:
+  dhis2-demo:
+    kind: dhis2
+    config:
+      base_url: https://play.im.dhis2.org/stable-2-43-1
+      basic_username: admin
+      basic_password: district
+      timeout: 60s
+
+params:
+  type: object
+  properties:
+    resources:
+      type: array
+      # DHIS2 collection names, spelled as they appear in the API path. These two are what a
+      # warehouse needs to make an export readable: what was measured, and where.
+      default: [dataElements, organisationUnits]
+      items:
+        type: string
+    fields:
+      type: string
+      default: id,name,shortName
+      description: The DHIS2 fields selector applied to every collection in the snapshot.
+    bucket:
+      type: string
+      default: dirigent-exports
+
+steps:
+  collections:
+    block: dhis2.metadata
+    for_each: ${params.resources}
+    config:
+      connection: dhis2-demo
+      resource: ${item}
+      fields: ${params.fields}
+      # Paging off: a snapshot wants the whole collection, and a half-read one is worse than
+      # no snapshot at all.
+      paging: false
+
+  snapshot:
+    block: transform.jq
+    depends_on: [collections]
+    config:
+      input:
+        resources: ${params.resources}
+        pages: ${steps.collections.output}
+      # The fan-out's output is its items' outputs in item order, so it lines up with the
+      # resource list positionally. That alignment is only safe because the step above has no
+      # `items: continue` -- a tolerated failure would drop an element and silently shift
+      # every collection one name to the left.
+      program: |
+        [.resources, [.pages[].json_body]]
+        | transpose
+        | map({(.[0]): (.[1][.[0]] // [])})
+        | add
+      # transform.jq serialises its result as JSON when save_to is set, so nothing needs to
+      # call tojson; the step's own `value` comes back null because the result went to storage.
+      save_to: s3://${params.bucket}/dhis2/metadata/snapshot.json
+
+  counts:
+    block: transform.jq
+    depends_on: [collections]
+    config:
+      input:
+        resources: ${params.resources}
+        pages: ${steps.collections.output}
+      program: |
+        [.resources, [.pages[].json_body]]
+        | transpose
+        | map({resource: .[0], rows: ((.[1][.[0]] // []) | length)})
+
+  then_export:
+    block: pipeline.run
+    # Both branches, so the run does not start the export before the snapshot it is supposed to
+    # be described by has actually landed.
+    depends_on: [snapshot, counts]
+    config:
+      pipeline: dhis2-export-to-s3
+      # Waiting makes this run the whole story: one run id covers the metadata and the data,
+      # and a failed export is visible here rather than only in the child.
+      wait: true
+      # A child that finished completed_with_errors is a partial export, and a snapshot paired
+      # with a partial export should not report success.
+      strict: true

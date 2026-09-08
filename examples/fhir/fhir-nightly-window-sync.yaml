@@ -1,0 +1,182 @@
+# A nightly incremental pull: everything a FHIR server changed last night, type by type.
+#
+# THE FLOW, END TO END. A cron schedule fires at five and hands the run the interval that just
+# closed. One step fans out over the resource types being synced, each item asking the server
+# for what changed inside that interval, and a join reads the settled fan-out back into one
+# summary that says how much of each type moved and which types could not be reached.
+#
+# THE WINDOW IS A PROPERTY OF THE RUN, NOT OF THIS DOCUMENT. Nothing below declares it: the
+# cadence computes it, and every schedule-fired run carries `${run.window.start}` up to but not
+# including `${run.window.end}`. Half-open is the whole point of an incremental sync -- `ge` on
+# the start and `lt` on the end means two consecutive nights tile the timeline without
+# double-reading a resource that landed exactly on the boundary, and without leaving a hole.
+# An ad hoc run has to be given one, and a run carrying no window REFUSES the reference rather
+# than resolving it to nothing and asking the server for its entire history.
+#
+# THE FACADE HAS NO _lastUpdated. `d2w fhir serve` publishes a fixed store of definitional
+# resources and a spool of receipts; its searches take `_id`, `url`, `identifier` and
+# `questionnaire`, and there is no modified-since anywhere. Its incremental surface is
+# `GET /facade/spool`, whose receipts carry a lifecycle and a `received_at`, paged by an opaque
+# token. So this document is written against a general FHIR server -- `fhir_base` defaults to a
+# public HAPI R4 sandbox -- and the shape it teaches is the one a spool pull would use too.
+#
+# WHAT ARRIVES. One searchset Bundle per resource type, each holding what changed:
+#
+#   {"resourceType": "Bundle", "type": "searchset", "total": 41,
+#    "link": [{"relation": "self", "url": "..."},
+#             {"relation": "next", "url": ".../Patient?_getpages=...&_getpagesoffset=50"}],
+#    "entry": [{"resource": {"resourceType": "Patient", "id": "137202428",
+#                            "meta": {"lastUpdated": "2026-09-04T22:14:03Z"}}}]}
+#
+# WHAT LEAVES. One summary record per run:
+#
+#   {"window": {"from": "2026-09-04T05:00:00Z", "to": "2026-09-05T05:00:00Z"},
+#    "types": [{"type": "Patient", "total": 41, "read": 50, "more_pages": true}],
+#    "changed": 41, "types_reached": 3, "types_asked": 4}
+#
+# WHY items: continue. Each resource type is its own item and its own attempt. Under the
+# default, `fail_fast`, one type the server chokes on fails the whole night's sync. Under
+# `items: continue` that type's failure is recorded against its own run item, the others
+# finish, and the run reports `completed_with_errors`. The cost is worth knowing: a failed item
+# is ABSENT from the step's output -- not null, absent -- so the join sees only what worked,
+# which is why the summary counts the types it asked for as well as the ones it reached.
+#
+# WHY rule: all_done ON THE JOIN. The default `all_success` edge would skip the summary exactly
+# on the night something went wrong, which is the night it is worth having.
+#
+# WHY THE ABSOLUTE URL. A half-open range needs `_lastUpdated` twice in one search, and the
+# `query` map holds one value per key, so the search is written as a URL. That is also the
+# honest shape for FHIR paging: `next` is an opaque link to be followed verbatim, never a page
+# number to be constructed, and a real sync follows it until it is gone. This one reads the
+# first page and reports whether there were more, which is the smallest thing that does not
+# quietly lie about completeness.
+#
+# WHERE A READER CHANGES IT. `resource_types` is the fan-out and the whole scope of the sync;
+# `page_size` is what one page holds. Add a type to the list and the grid grows on the next
+# firing with nothing else edited.
+#
+#   dg run --local examples/fhir/fhir-nightly-window-sync.yaml --window 2026-09-01..2026-09-02
+#   dg apply examples/fhir/fhir-nightly-window-sync.yaml
+#   dg backfill fhir-nightly-window-sync --schedule nightly \
+#     --from 2026-09-01T05:00:00Z --to 2026-09-08T05:00:00Z --dry-run
+
+format: dirigent/v1
+kind: pipeline
+code: fhir-nightly-window-sync
+name: Nightly windowed FHIR sync
+description: |
+  Pull everything a FHIR server changed inside the interval a nightly schedule just closed,
+  one fan-out item per resource type, and join the results into one summary.
+
+  The window belongs to the run, not to this document: `${run.window.start}` and
+  `${run.window.end}` are half-open ISO instants, so consecutive firings tile the timeline
+  without overlap or gap. `items: continue` lets one unreachable type cost only itself.
+
+tags: [fhir, dhis2, cross-boundary]
+
+requires:
+  blocks:
+    - http.request
+    - transform.jq
+
+connections:
+  # Carried for its timeout and TLS setting; the searches below give absolute URLs, because a
+  # half-open range needs the same query parameter twice and the query map holds one per key.
+  fhir-source:
+    kind: http
+    config:
+      base_url: https://hapi.fhir.org/baseR4
+      timeout: 60s
+  # Not read by this document, which only pulls. It is here because the sync exists to feed
+  # DHIS2, and the shelf's other documents are what turn each of these types into an import:
+  # Patient through patient-to-tracked-entity.yaml, Encounter through encounter-to-event.yaml,
+  # QuestionnaireResponse through capture-bundle-to-data-values.yaml.
+  dhis2-demo:
+    kind: dhis2
+    config:
+      base_url: https://play.im.dhis2.org/stable-2-43-1
+      basic_username: admin
+      basic_password: district
+      timeout: 60s
+
+params:
+  type: object
+  properties:
+    fhir_base:
+      type: string
+      description: The server to sync from. Not the facade -- it answers no _lastUpdated.
+      default: https://hapi.fhir.org/baseR4
+    resource_types:
+      type: array
+      description: The scope of the sync. One fan-out item each.
+      default: [Patient, Encounter, Observation]
+      items:
+        type: string
+    page_size:
+      type: integer
+      description: How many resources one page holds. A server may answer fewer; it never
+        answers more.
+      default: 50
+
+steps:
+  # for_each is expanded when the run is created, so it reads params, run and item -- never
+  # another step's output, because the cardinality of the grid has to be known before anything
+  # executes. That is why the types are a parameter and not something discovered from
+  # /metadata: a run's shape is fixed before its first request.
+  pull:
+    block: http.request
+    for_each: "${params.resource_types}"
+    items: continue
+    config:
+      url: "${params.fhir_base}/${item}?_lastUpdated=ge${run.window.start}&_lastUpdated=lt${run.window.end}&_count=${params.page_size}&_sort=_lastUpdated"
+      method: GET
+      headers:
+        Accept: application/fhir+json
+      # A type this server does not serve answers 404 or an OperationOutcome, and under
+      # items: continue that costs one item rather than the night.
+      success_status: [200]
+
+  # The join. A fan-out step's output is the list of its items' outputs in item order, so the
+  # object carrying each response is unwrapped once here.
+  summarise:
+    block: transform.jq
+    depends_on: [pull]
+    rule: all_done
+    config:
+      input:
+        pages: "${steps.pull.output}"
+        asked: "${params.resource_types}"
+        from: "${run.window.start}"
+        to: "${run.window.end}"
+      program: |
+        . as {$pages, $asked, $from, $to}
+        | [$pages[] | .json_body
+           | {type: ((.entry // [])[0].resource.resourceType
+                     // (.link[0].url | split("/") | last | split("?") | first)),
+              # `total` is the server's count of the whole searchset, a different number from
+              # how many rode in this page: a sync reporting the page size would say the same
+              # thing on a quiet night and a busy one. A server is allowed to omit it on a
+              # large searchset, and HAPI does, so it is nullable and the count below says so.
+              total: .total,
+              read: ((.entry // []) | length),
+              more_pages: ([(.link // [])[] | select(.relation == "next")] | length > 0)}] as $seen
+        | {window: {from: $from, to: $to},
+           types: $seen,
+           changed: ([$seen[] | .total // .read] | add // 0),
+           counted_from_pages: [$seen[] | select(.total == null) | .type],
+           types_reached: ($seen | length),
+           types_asked: ($asked | length),
+           # The gap between the two is what items: continue bought, and saying it out loud is
+           # what keeps a partial sync from reading like a complete one.
+           types_missed: ($asked - [$seen[] | .type])}
+
+triggers:
+  schedules:
+    - code: nightly
+      name: Nightly, Oslo time
+      description: Reads the day that closed at five this morning.
+      cron: "0 5 * * *"
+      # The zone belongs to the schedule, so the window it derives is a day of Oslo's clock
+      # rather than a fixed 24 hours: the spring-forward night is 23 hours long and the
+      # fall-back night is 25, and a pair of instants says so honestly.
+      timezone: Europe/Oslo

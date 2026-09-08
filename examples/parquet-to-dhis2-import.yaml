@@ -1,0 +1,181 @@
+# The other direction: a parquet file somebody drops in a bucket, ending up inside DHIS2.
+#
+# dhis2-values-to-parquet.yaml reads DHIS2 and writes parquet. This is the return leg, and it
+# is the one that needs a gate: bytes arriving from outside are not a data value set until
+# something has checked that they are. Three packs meet here -- storage-s3 for the drop,
+# parquet for the decode, builtin for the reshape and the schema gate, dhis2 for the write --
+# which is why it lives in the integration and in none of them.
+#
+# What happens, hop by hop:
+#
+#   dropped   storage.exists is a sensor: each poke is one cheap head request, "not yet" is
+#             the expected answer, and the run parks rather than holding a worker. min_size
+#             is what stops it opening a half-written object a producer is still uploading.
+#   decode    convert.arrow parquet -> json, inline. The result is a JSON *string* holding an
+#             array of row objects, one per data value, because that is what a parquet table
+#             is: rows and columns, with no envelope around them.
+#   shape     that string is parsed and wrapped: DHIS2 wants {"dataValues": [...]}, the file
+#             carries the bare list. This is the whole impedance mismatch between a columnar
+#             file and a DHIS2 payload, and it is two lines of jq.
+#   gate      validate.schema against the carried schema below. Every dataElement and orgUnit
+#             must be a real DHIS2 uid and every period a real DHIS2 period, checked by the
+#             dhis2-uid and dhis2-period formats the dhis2 pack contributes -- so a typo is a
+#             refused run and not a partially-written instance. The gate has no `rule`, so the
+#             default all_success applies: the import below simply never starts if this fails.
+#   import    dhis2.data_value_set_import of the value the gate handed on. atomic_mode ALL
+#             means one conflicted value refuses the whole set, which is the right default for
+#             a file: half an import is worse than none.
+#   signed_off  dhis2.data_set_complete is a sensor, not a writer -- it waits for a human in
+#             DHIS2 to mark the set complete for that period and org unit. That is the honest
+#             end of a load: the data is in, and the run stays open until somebody stands
+#             behind it. on_timeout: skip ends the run cleanly when nobody does.
+#
+# To make it yours: point drop_uri at the object your producer writes, name your own data set,
+# period and org unit, and turn dry_run off once you are importing into an instance you own.
+# It is on by default because the play server is shared: the import is fully exercised and
+# nothing is written. Which connection backs s3:// is an instance setting
+# (storage_connections: {s3: <code>}).
+#
+#   dg run --local examples/parquet-to-dhis2-import.yaml
+#   dg run --local examples/parquet-to-dhis2-import.yaml -p dry_run=false
+
+format: dirigent/v1
+kind: pipeline
+code: parquet-to-dhis2-import
+name: A parquet drop imported into DHIS2
+description: Wait for a parquet object, check it, then import it as a DHIS2 data value set.
+
+tags: [dhis2, parquet, s3, validate, cross-boundary]
+
+requires:
+  blocks:
+    - storage.exists
+    - convert.arrow
+    - transform.jq
+    - validate.schema
+    - dhis2.data_value_set_import
+    - dhis2.data_set_complete
+
+# The public DHIS2 play server, carried inline so this document runs standalone. Against an
+# instance you own, name a connection that instance holds instead of carrying one.
+connections:
+  dhis2-demo:
+    kind: dhis2
+    config:
+      base_url: https://play.im.dhis2.org/stable-2-43-1
+      basic_username: admin
+      basic_password: district
+      timeout: 60s
+
+# Carried in the document, so the gate needs nothing handed to it and a --local run checks the
+# same shape a server would. dhis2-uid and dhis2-period are formats the dhis2 pack contributes
+# to the catalog; an instance without that pack cannot run this document at all, which is the
+# point of naming them in requires.
+schemas:
+  dhis2-data-value-set:
+    type: object
+    required: [dataValues]
+    additionalProperties: false
+    properties:
+      dataValues:
+        type: array
+        minItems: 1
+        items:
+          type: object
+          required: [dataElement, period, orgUnit, value]
+          properties:
+            dataElement: { type: string, format: dhis2-uid }
+            period: { type: string, format: dhis2-period }
+            orgUnit: { type: string, format: dhis2-uid }
+            categoryOptionCombo: { type: string, format: dhis2-uid }
+            attributeOptionCombo: { type: string, format: dhis2-uid }
+            value: { type: string }
+            comment: { type: string }
+
+params:
+  type: object
+  properties:
+    drop_uri:
+      type: string
+      default: s3://dirigent-incoming/dhis2/data-values.parquet
+      description: The object the upstream producer writes; this run starts when it appears.
+    data_set:
+      type: string
+      default: BfMAe6Itzgt
+    period:
+      type: string
+      default: "202507"
+    org_unit:
+      type: string
+      default: vSbt6cezomG
+    dry_run:
+      type: boolean
+      default: true
+      description: On by default because the play server is shared; off on an instance you own.
+
+steps:
+  dropped:
+    block: storage.exists
+    poll: 1m
+    deadline: 12h
+    # Nobody dropped a file inside the window: that is a quiet day, not a broken pipeline.
+    on_timeout: skip
+    config:
+      uri: ${params.drop_uri}
+      # A producer uploading a large object makes the key visible before the bytes are all
+      # there. A floor stops the decode reading a truncated file.
+      min_size: 1kb
+
+  decode:
+    block: convert.arrow
+    depends_on: [dropped]
+    config:
+      input_uri: ${params.drop_uri}
+      from: parquet
+      to: json
+      # No save_to: the decoded text is handed on inline, because a data value set that fits a
+      # single import call also fits a step output.
+      max_input: 64mb
+
+  shape:
+    block: transform.jq
+    depends_on: [decode]
+    config:
+      input: ${steps.decode.output.text}
+      # fromjson because the codec answers with text; the object literal is the envelope DHIS2
+      # requires and a parquet table has no room for.
+      program: |
+        {dataValues: fromjson}
+
+  gate:
+    block: validate.schema
+    depends_on: [shape]
+    config:
+      input: ${steps.shape.output.value}
+      schema: dhis2-data-value-set
+
+  import:
+    block: dhis2.data_value_set_import
+    depends_on: [gate]
+    config:
+      connection: dhis2-demo
+      # Read from the gate rather than from shape: the reference is what proves, in the
+      # document itself, that nothing reaches DHIS2 without passing the schema.
+      data_values: ${steps.gate.output.value}
+      dry_run: ${params.dry_run}
+      import_strategy: CREATE_AND_UPDATE
+      # One refused value refuses the whole file. A partially imported month is harder to
+      # reason about than a failed run, and the file can simply be dropped again.
+      atomic_mode: ALL
+
+  signed_off:
+    block: dhis2.data_set_complete
+    depends_on: [import]
+    poll: 30m
+    deadline: 72h
+    on_timeout: skip
+    config:
+      connection: dhis2-demo
+      data_set: ${params.data_set}
+      period: ${params.period}
+      org_unit: ${params.org_unit}

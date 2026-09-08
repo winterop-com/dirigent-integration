@@ -1,0 +1,5 @@
+# Dirigent's settings for the compose stack. Environment variables override these.
+
+log_format: json
+log_level: INFO
+worker_concurrency: 8

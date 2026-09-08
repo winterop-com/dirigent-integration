@@ -1,0 +1,218 @@
+# A FHIR Subscription notification delivered to a webhook, translated, and imported.
+#
+# THE FLOW, END TO END. A FHIR server holds a Subscription that watches for new captures. When
+# one arrives it POSTs a notification to this pipeline's webhook endpoint; the webhook maps the
+# notified resource onto a parameter, the document translates it into a data value set, and the
+# import runs as a dry run.
+#
+# THE SUBSCRIPTION CONTRACT, WHICH IS THE POINT OF THIS FILE. A FHIR Subscription is a standing
+# request: "when a resource matching this search appears, tell me here". Three fields carry it.
+#
+#   criteria      a search string, exactly as it would be typed against the server, e.g.
+#                 "QuestionnaireResponse?questionnaire=http://example.org/fhir/Questionnaire/lyLU2wR22tC"
+#   channel.type  how to be told. `rest-hook` is an HTTP POST, which is what a dirigent
+#                 webhook is; the others are websocket, email, and message.
+#   channel.endpoint  where to POST it -- the hooks URL the instance minted for this pipeline.
+#
+# What arrives in that POST depends on `channel.payload`, and the three choices are a real
+# decision rather than a formality:
+#
+#   absent          a PING. An empty body: "something matched, come and look". The pipeline
+#                   then has to search the server itself, which is more work and is also the
+#                   only choice that never puts patient data in a webhook body.
+#   id-only         the notification names the resource; the pipeline reads it back.
+#   full-resource   the resource rides in the notification. One request, no read-back, and
+#                   the delivery is now carrying clinical data -- so it is signed, and the
+#                   endpoint is not on the public internet.
+#
+# This document takes full-resource, because it is the shape that shows the whole translation
+# in one file. In R4 that body is the bare resource; R5 and the R4 backport wrap it in a
+# history Bundle whose first entry is a SubscriptionStatus and whose second is the resource,
+# which is the shape mapped below and the one most servers now send.
+#
+# `d2w fhir serve` HAS NO SUBSCRIPTION. Its capture surface is `POST /QuestionnaireResponse`
+# and its notification surface is the receipt spool -- `GET /facade/spool`, whose lifecycle
+# moves received -> forwarded or rejected. A pipeline pulls that spool on a schedule instead
+# (fhir-nightly-window-sync.yaml is that shape). This document is for the FHIR server that DOES
+# support Subscription, which is most of them, and it is written so the same translation serves
+# either way.
+#
+# WHAT ARRIVES. The notification body:
+#
+#   {"resourceType": "Bundle", "type": "history",
+#    "entry": [
+#      {"resource": {"resourceType": "SubscriptionStatus", "type": "event-notification",
+#                    "eventsSinceSubscriptionStart": "17"}},
+#      {"resource": {"resourceType": "QuestionnaireResponse", "status": "completed",
+#                    "questionnaire": ".../Questionnaire/lyLU2wR22tC",
+#                    "subject": {"reference": "Location/dczh6Jfd4no"},
+#                    "extension": [{"url": ".../d2-period",
+#                                   "extension": [{"url": "iso", "valueString": "202608"}]}],
+#                    "item": [...]}}]}
+#
+# WHAT LEAVES. The `/api/dataValueSets` envelope, same as every inbound document here:
+#
+#   {"dataSet": "lyLU2wR22tC", "period": "202608", "orgUnit": "dczh6Jfd4no",
+#    "dataValues": [{"dataElement": "GMd99K8gVut",
+#                    "categoryOptionCombo": "qNCMOhkoQju", "value": "426.3"}]}
+#
+# WHERE A READER CHANGES IT. The webhook's `params_from_payload` at the foot of this file, and
+# nothing else. The mapping is STRICT: each parameter names one dotted path into the body, a
+# path the body does not have refuses the delivery, and a parameter the mapping does not
+# mention cannot be reached by any caller whatever they POST. A server sending the bare R4
+# resource rather than a Bundle changes `capture` to `$` -- which this syntax spells as the
+# resource's own top-level keys, so the mapping names them.
+#
+# WHAT LIVES ON THE INSTANCE AND NOT IN GIT. The endpoint's token, whether it is active, and
+# every delivery it has taken. `dg webhook rotate-token` shows a token exactly once.
+#
+#   dg run --local examples/fhir/fhir-subscription-webhook-to-dhis2.yaml
+#
+# Against an instance, where the endpoint exists:
+#
+#   dg apply examples/fhir/fhir-subscription-webhook-to-dhis2.yaml
+#   dg webhook rotate-token fhir-subscription-webhook-to-dhis2 fhir-notification
+#   curl -X POST "$DG_URL/hooks/$TOKEN" -H 'Content-Type: application/json' --data @notification.json
+
+format: dirigent/v1
+kind: pipeline
+code: fhir-subscription-webhook-to-dhis2
+name: A FHIR Subscription notification imported
+description: |
+  Take a FHIR `Subscription` rest-hook notification on a webhook, translate the notified
+  `QuestionnaireResponse` into a DHIS2 data value set, and rehearse the import.
+
+  The subscription contract is three fields: `criteria` (a search string), `channel.type`
+  (`rest-hook` is an HTTP POST), and `channel.endpoint` (the hooks URL). `channel.payload`
+  decides whether the delivery is a ping, an id, or the resource itself -- this takes the
+  resource, wrapped in the history `Bundle` R5 and the R4 backport send.
+
+tags: [fhir, dhis2, cross-boundary]
+
+requires:
+  blocks:
+    - transform.jq
+    - dhis2.data_value_set_import
+
+connections:
+  dhis2-demo:
+    kind: dhis2
+    config:
+      base_url: https://play.im.dhis2.org/stable-2-43-1
+      basic_username: admin
+      basic_password: district
+      timeout: 60s
+
+params:
+  type: object
+  properties:
+    capture:
+      type: object
+      description: The notified QuestionnaireResponse. The default is what a delivery would
+        have carried, so the document runs without one.
+      default:
+        resourceType: QuestionnaireResponse
+        status: completed
+        authored: "2026-08-31T09:00:00Z"
+        questionnaire: http://example.org/fhir/Questionnaire/lyLU2wR22tC
+        subject:
+          reference: Location/dczh6Jfd4no
+        extension:
+          - url: http://example.org/fhir/StructureDefinition/d2-period
+            extension:
+              - url: iso
+                valueString: "202608"
+              - url: type
+                valueCode: Monthly
+          - url: http://example.org/fhir/StructureDefinition/d2-attribute-option-combo
+            valueCoding:
+              code: N7QFN41eTN8
+        item:
+          - linkId: GMd99K8gVut
+            item:
+              - linkId: GMd99K8gVut.qNCMOhkoQju
+                answer:
+                  - valueDecimal: 426.3
+              - linkId: GMd99K8gVut.LbeIlyHEhKr
+                answer:
+                  - valueDecimal: 628.2
+          - linkId: wfKKFhBn0Q0
+            answer:
+              - valueDecimal: 142.1
+    events_since_start:
+      type: string
+      description: The SubscriptionStatus counter. A gap between two deliveries means a
+        notification was lost, which is the only way this channel says so.
+      default: "0"
+
+steps:
+  # Only a completed response is translated. An in-progress one is a form still being filled,
+  # and a notification is allowed to fire on it -- `criteria` matches a resource, not a state.
+  translate:
+    block: transform.jq
+    config:
+      input: "${params.capture}"
+      program: |
+        if .status != "completed" then
+          error("the notified response is \(.status), not completed; nothing to import")
+        else . end
+        | . as $r
+        | {dataSet: ($r.questionnaire | split("/") | last),
+           period: ([$r.extension[] | select(.url | endswith("/d2-period")).extension[]
+                     | select(.url == "iso").valueString][0]),
+           orgUnit: ($r.subject.reference | ltrimstr("Location/")),
+           attributeOptionCombo: (
+             [$r.extension[] | select(.url | endswith("/d2-attribute-option-combo"))][0]
+             | .valueCoding.code),
+           dataValues: [
+             $r.item[] | recurse(.item[]?)
+             | select((.answer // []) | length > 0)
+             | (.linkId | split(".")) as $key
+             | (.answer[0] | (.valueDecimal // .valueInteger // .valueString // .valueBoolean)) as $v
+             | {dataElement: $key[0], value: ($v | tostring)}
+               + (if ($key | length) > 1 then {categoryOptionCombo: $key[1]} else {} end)]}
+        | del(.attributeOptionCombo | select(. == null))
+
+  # A notification arrives once and is not replayed, so the import's retry budget is what
+  # stands between a momentary DHIS2 and a lost capture. dry_run makes this a rehearsal;
+  # dropping it is the whole difference between this document and a live forwarder.
+  rehearse:
+    block: dhis2.data_value_set_import
+    depends_on: [translate]
+    retry:
+      # The budget counts the first try, so this is one attempt and two retries.
+      max_attempts: 3
+      backoff: 5s
+    config:
+      connection: dhis2-demo
+      data_values: "${steps.translate.output.value}"
+      dry_run: true
+      atomic_mode: ALL
+
+  receipt:
+    block: transform.jq
+    depends_on: [rehearse]
+    config:
+      input:
+        summary: "${steps.rehearse.output}"
+        events_since_start: "${params.events_since_start}"
+        document: "${steps.translate.output.value}"
+      program: |
+        {notification: .events_since_start,
+         data_set: .document.dataSet,
+         period: .document.period,
+         org_unit: .document.orgUnit,
+         status: .summary.status,
+         would_import: .summary.imported,
+         conflicts: (.summary.conflicts | length)}
+
+triggers:
+  webhooks:
+    # The whole declaration. `capture` takes the notified resource out of the history Bundle's
+    # second entry -- the first is the SubscriptionStatus -- and the counter comes off that
+    # status. Both are validated against params above before a run is created, so a delivery
+    # that does not carry them is refused rather than half-run.
+    - code: fhir-notification
+      params_from_payload:
+        capture: "$.entry.1.resource"
+        events_since_start: "$.entry.0.resource.eventsSinceSubscriptionStart"

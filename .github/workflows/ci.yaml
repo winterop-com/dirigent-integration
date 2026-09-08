@@ -1,0 +1,36 @@
+# Assemble the ecosystem and run everyone together: the packs' own tests and examples, the
+# cross-boundary examples, and the integration's own tests -- one green or red.
+name: integration
+
+on:
+  # The assembled check is expensive -- clone every pack, install the whole runtime, run every
+  # suite -- so it is deliberately infrequent. Per-commit safety is each repo's own CI; this
+  # one is the integration truth, caught once a day and on demand. It never triggers on push.
+  schedule:
+    # Nightly, so a green ecosystem yesterday is re-proven against today's branch tips.
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+  # Optional, opt-in: a component repo may dispatch this on a release or tag (never per push),
+  # to re-prove the ecosystem at a version boundary. No component repo sends it today.
+  repository_dispatch:
+    types: [component-released]
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.0.1
+        with:
+          cache-dependency-glob: "**/pyproject.toml"
+
+      - name: Set up Python
+        run: uv python install 3.13
+
+      - name: Assemble the runtime
+        run: uv sync
+
+      - name: Run the whole ecosystem
+        run: uv run python scripts/run_integration.py

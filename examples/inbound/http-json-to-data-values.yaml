@@ -1,0 +1,151 @@
+# The shortest honest inbound path: a public JSON API, one reshape, one gated import.
+#
+# The hops, and the shape at each one:
+#
+#   1. pull       -> the World Bank indicator API answers [metadata, [observations]]:
+#                    a two-element array whose second element is the rows, each row
+#                    {countryiso3code, date: "2023", value: 8791092, ...}
+#   2. reshape    -> {dataValues: [{dataElement, period, orgUnit, value}]}, which is the
+#                    envelope /api/dataValueSets takes. Every value is a STRING there,
+#                    even a count, which is why the program says tostring
+#   3. gate       -> the same envelope, refused unless every id is a real DHIS2 UID and
+#                    every period a real DHIS2 period
+#   4. import     -> the instance's own summary: status and the four counts
+#
+# What makes it yours: point source_url at your API, and set data_element and org_unit to
+# uids from your instance. The mapping in the reshape is the only part that knows both
+# worlds, and it is six lines -- which is the whole argument for keeping the pull and the
+# import as blocks rather than as code.
+#
+# The pairing is a real one, which is why the defaults are these: the World Bank's
+# population figure is yearly, and the demo's Total Population element sits in a yearly
+# data set assigned to Ngelehun CHC. A yearly figure sent at a monthly element is refused
+# by the instance, and no schema catches that -- only the instance holds the period type of
+# a data set, which is exactly what the dry run below is for.
+#
+# dry_run defaults to true, so a first run asks the instance to validate the document and
+# write nothing. The play server is shared, so leave it true there.
+#
+#   dg run --local examples/inbound/http-json-to-data-values.yaml
+#   dg run --local examples/inbound/http-json-to-data-values.yaml -p country=NGA
+
+format: dirigent/v1
+kind: pipeline
+code: http-json-to-data-values
+name: A public JSON API into DHIS2
+description: |
+  Pull a public JSON feed, reshape it into a DHIS2 data value set, gate it on DHIS2's own
+  id and period formats, and hand it to `dhis2.data_value_set_import` as a dry run.
+
+tags: [inbound, dhis2, http, transform, validate, cross-boundary]
+
+requires:
+  blocks:
+    - http.request
+    - transform.jq
+    - validate.schema
+    - dhis2.data_value_set_import
+
+connections:
+  dhis2-demo:
+    kind: dhis2
+    config:
+      base_url: https://play.im.dhis2.org/stable-2-43-1
+      basic_username: admin
+      basic_password: district
+      timeout: 60s
+
+params:
+  type: object
+  properties:
+    source_url:
+      type: string
+      description: The outside feed. Anything answering JSON works; the reshape is what changes.
+      default: https://api.worldbank.org/v2/country/SLE/indicator/SP.POP.TOTL
+    country:
+      type: string
+      description: The ISO3 code spliced into source_url when it is left at its default.
+      default: SLE
+    data_element:
+      type: string
+      description: The uid every pulled observation lands on; Total Population, yearly.
+      default: WUg3MYWQ7pt
+    org_unit:
+      type: string
+      description: The facility the figure is reported for, and one the data set is assigned to.
+      default: DiszpKrYNg8
+    dry_run:
+      type: boolean
+      description: Whether the instance validates the import and writes nothing.
+      default: true
+
+# Carried with the document, so a --local run needs nothing applied first. dhis2-uid and
+# dhis2-period are format checkers the dhis2 pack contributes: they turn "a string" into
+# "a string DHIS2 will actually accept", which is the difference between failing here and
+# failing halfway through an import.
+schemas:
+  data-value-set:
+    type: object
+    required: [dataValues]
+    properties:
+      dataValues:
+        type: array
+        minItems: 1
+        items:
+          type: object
+          required: [dataElement, period, orgUnit, value]
+          properties:
+            dataElement: { type: string, format: dhis2-uid }
+            period: { type: string, format: dhis2-period }
+            orgUnit: { type: string, format: dhis2-uid }
+            value: { type: string }
+
+steps:
+  # No connection, because the outside system is not a credential this instance holds: an
+  # absolute url is the honest form for a public endpoint. A feed behind a key becomes an
+  # http connection instead, and only this step changes.
+  pull:
+    block: http.request
+    config:
+      url: "${params.source_url}"
+      method: GET
+      query:
+        format: json
+        per_page: 5
+
+  # Both worlds meet in one program, so the mapping is readable in one place. The select
+  # drops years the API has no figure for: an absent observation must not become a zero,
+  # because zero is a measurement and absence is not.
+  reshape:
+    block: transform.jq
+    depends_on: [pull]
+    config:
+      input:
+        observations: "${steps.pull.output.json_body}"
+        data_element: "${params.data_element}"
+        org_unit: "${params.org_unit}"
+      program: |
+        .data_element as $de
+        | .org_unit as $ou
+        | {dataValues: [
+            .observations[1][]
+            | select(.value != null)
+            | {dataElement: $de, period: .date, orgUnit: $ou, value: (.value | tostring)}
+          ]}
+
+  # The gate is also the waypoint: everything downstream reads the gate's output rather
+  # than the reshape's, so the shape every later step received is the one that was checked.
+  gate:
+    block: validate.schema
+    depends_on: [reshape]
+    config:
+      input: "${steps.reshape.output.value}"
+      schema: data-value-set
+
+  import:
+    block: dhis2.data_value_set_import
+    depends_on: [gate]
+    config:
+      connection: dhis2-demo
+      data_values: "${steps.gate.output.value}"
+      dry_run: "${params.dry_run}"

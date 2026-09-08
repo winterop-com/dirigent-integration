@@ -1,0 +1,73 @@
+[project]
+name = "dirigent-integration"
+version = "0.8.1"
+description = "The control center for the dirigent plugin ecosystem: assemble every pack, run everyone's tests and examples together."
+readme = "README.md"
+requires-python = ">=3.13"
+license = "LicenseRef-Proprietary"
+license-files = ["LICENSE"]
+
+# The assembled runtime: the dirigent packages needed to load a full catalog and run dg dev,
+# plus every official pack. The integration is the integration layer, so unlike a pack it may
+# depend on dirigent-core directly.
+dependencies = [
+    "dirigent-cli",
+    "dirigent-server",
+    "dirigent-core[otlp]",
+    "dirigent-blocks",
+    "dirigent-parquet",
+    "dirigent-storage-s3",
+    "dirigent-plugin",
+    "dirigent-common",
+    "dirigent-client",
+    "dirigent-dhis2",
+]
+
+# dirigent-testing is dev-only: the packs' suites import it, and nothing at runtime does,
+# so the batteries-included image built from this lock does not carry it.
+[dependency-groups]
+dev = [
+    "dirigent-testing",
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "pyyaml>=6",
+    "ruff>=0.16",
+]
+
+# All component packages ride their tracked branch, unpinned: the integration always assembles
+# the latest ecosystem. The dirigent runtime packages come from the monorepo by subdirectory;
+# dirigent-dhis2 comes from its own repository.
+[tool.uv.sources]
+dirigent-cli = { git = "https://github.com/winterop-com/dirigent", subdirectory = "packages/dirigent-cli", branch = "main" }
+dirigent-server = { git = "https://github.com/winterop-com/dirigent", subdirectory = "packages/dirigent-server", branch = "main" }
+dirigent-core = { git = "https://github.com/winterop-com/dirigent", subdirectory = "packages/dirigent-core", branch = "main" }
+dirigent-blocks = { git = "https://github.com/winterop-com/dirigent", subdirectory = "packages/dirigent-blocks", branch = "main" }
+dirigent-parquet = { git = "https://github.com/winterop-com/dirigent", subdirectory = "packages/dirigent-parquet", branch = "main" }
+dirigent-storage-s3 = { git = "https://github.com/winterop-com/dirigent", subdirectory = "packages/dirigent-storage-s3", branch = "main" }
+dirigent-plugin = { git = "https://github.com/winterop-com/dirigent", subdirectory = "packages/dirigent-plugin", branch = "main" }
+dirigent-common = { git = "https://github.com/winterop-com/dirigent", subdirectory = "packages/dirigent-common", branch = "main" }
+dirigent-client = { git = "https://github.com/winterop-com/dirigent", subdirectory = "packages/dirigent-client", branch = "main" }
+dirigent-testing = { git = "https://github.com/winterop-com/dirigent", subdirectory = "packages/dirigent-testing", branch = "main" }
+dirigent-dhis2 = { git = "https://github.com/winterop-com/dirigent-dhis2", branch = "main" }
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 120
+src = ["scripts", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "D", "SIM", "UP", "B", "TID"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D103", "D100", "D101", "D102", "D104"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.format]
+quote-style = "double"
+docstring-code-format = true

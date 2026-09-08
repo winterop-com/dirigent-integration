@@ -1,0 +1,225 @@
+# A FHIR Patient search turned into a DHIS2 tracked entity, posted to /api/tracker by hand.
+#
+# THE FLOW, END TO END. Search the facade's Patient register by identifier, read one Patient
+# out of the searchset Bundle, build the `/api/tracker` payload DHIS2 wants for a tracked
+# entity and its enrollment, and post it with importMode=VALIDATE.
+#
+# WHY http.request AND NOT dhis2.tracker. `dhis2.tracker` READS: it is idempotent, it takes a
+# `kind` of trackedEntities, enrollments or events, and it has no payload field at all. There
+# is no tracker write block in the pack today, so a pipeline that writes tracker objects posts
+# them itself. That works without a second credential, because `http.request` resolves a
+# connection's base URL, basic credentials, TLS setting and timeout STRUCTURALLY, by field
+# name, whatever kind the connection is -- so the `dhis2` connection this pack contributes
+# drives an ordinary HTTP call. One caveat, and it is the reason this comment exists: only
+# `basic_username`/`basic_password` are read that way. A dhis2 connection authenticating with
+# `api_token` reaches `http.request` UNAUTHENTICATED, so a token-based instance needs an
+# `http` connection carrying the token as a header instead.
+#
+# WHAT ARRIVES. The register projects each DHIS2 tracked entity as a Patient:
+#
+#   {"resourceType": "Patient", "id": "coxwIkMqNBB",
+#    "meta": {"tag": [{"system": "http://dhis2.org/fhir/id/tracked-entity-type",
+#                      "code": "nEenWmSyUEp"}]},
+#    "identifier": [
+#      {"system": "http://dhis2.org/fhir/id/tracked-entity", "value": "coxwIkMqNBB"},
+#      {"system": "http://dhis2.org/fhir/tracked-entity-attribute/AuPLng5hLbE",
+#       "value": "299554435"}],
+#    "extension": [{"url": ".../d2-tracked-entity-attribute-value",
+#                   "extension": [{"url": "attributeId", "valueString": "w75KJ2mc4zz"},
+#                                 {"url": "value", "valueString": "Eden"}]}]}
+#
+# The split is deliberate and it is the whole mapping: a tracked entity attribute DHIS2
+# declares `unique` is projected as an `identifier` under its own per-attribute system, and
+# every other attribute rides as a `D2TrackedEntityAttributeValue` extension. Both are
+# attributes on the way back in.
+#
+# WHAT LEAVES. One `/api/tracker` document:
+#
+#   {"trackedEntities": [
+#      {"trackedEntity": "coxwIkMqNBB", "trackedEntityType": "nEenWmSyUEp",
+#       "orgUnit": "ImspTQPwCqd",
+#       "attributes": [{"attribute": "w75KJ2mc4zz", "value": "Eden"},
+#                      {"attribute": "AuPLng5hLbE", "value": "299554435"}],
+#       "enrollments": [{"enrollment": "EnAaBbCcDd1", "program": "IpHINAT79UW",
+#                        "orgUnit": "ImspTQPwCqd", "enrolledAt": "2026-09-01",
+#                        "status": "ACTIVE"}]}]}
+#
+# WHICH SYSTEM BECOMES WHAT.
+#
+#   meta.tag under .../id/tracked-entity-type          -> trackedEntityType
+#   identifier under .../id/tracked-entity             -> trackedEntity (the uid)
+#   identifier under .../tracked-entity-attribute/<uid> -> one attribute, uid from the system
+#   D2TrackedEntityAttributeValue extension            -> one attribute, uid from attributeId
+#
+# WHERE A READER CHANGES IT. `program` is the tracker program to enrol into and `org_unit` the
+# unit that owns the registration; both are DHIS2 uids and neither is anywhere in the Patient,
+# because the register publishes people rather than enrollments. `search_identifier` is what
+# picks the person: a bare value tries every key, `system|value` pins one.
+#
+# WHAT THIS DOES NOT DO. It does not mint an enrollment uid. A registration needs one, DHIS2
+# does not generate it for this shape, and inventing an 11-character uid in jq would teach the
+# wrong lesson -- so `enrollment_uid` is a parameter, which is exactly where a real forwarder
+# derives one deterministically so a rehearsal and an import name the same object.
+#
+#   dg run --local examples/fhir/fhir-patient-to-tracked-entity.yaml
+#   dg run --local examples/fhir/fhir-patient-to-tracked-entity.yaml -p search_identifier=299554435
+
+format: dirigent/v1
+kind: pipeline
+code: fhir-patient-to-tracked-entity
+name: FHIR Patient to a DHIS2 tracked entity
+description: |
+  Search the facade's `Patient` register and build the `/api/tracker` payload for one tracked
+  entity and its enrollment, posted with `importMode=VALIDATE`.
+
+  `dhis2.tracker` reads and does not write, so the write is an ordinary `http.request` on the
+  `dhis2` connection -- which works because the HTTP blocks read `base_url` and the basic
+  credentials structurally, by field name, from a connection of any kind.
+
+tags: [fhir, dhis2, cross-boundary]
+
+requires:
+  blocks:
+    - http.request
+    - transform.jq
+
+connections:
+  fhir-facade:
+    kind: http
+    config:
+      base_url: http://localhost:8095
+      timeout: 30s
+  # Driven by two different blocks below: `dhis2.*` blocks would resolve it through
+  # dhis2w-client, and `http.request` resolves the same record structurally. The password is a
+  # SecretStr either way -- sealed on the way in, redacted in every read back.
+  dhis2-demo:
+    kind: dhis2
+    config:
+      base_url: https://play.im.dhis2.org/stable-2-43-1
+      basic_username: admin
+      basic_password: district
+      timeout: 60s
+
+params:
+  type: object
+  properties:
+    search_identifier:
+      type: string
+      description: The identifier token to find the person by; bare value, or system|value.
+      default: "299554435"
+    tracked_entity_type:
+      type: string
+      description: Which register to search, over meta.tag.
+      default: nEenWmSyUEp
+    program:
+      type: string
+      description: The tracker program to enrol into. Not in the Patient, because the register
+        publishes people and not enrollments.
+      default: IpHINAT79UW
+    org_unit:
+      type: string
+      description: The org unit owning the registration.
+      default: ImspTQPwCqd
+    enrollment_uid:
+      type: string
+      description: The enrollment's own uid, which the client mints. A real forwarder derives
+        it from the receipt so a rehearsal and an import name the same object.
+      default: EnAaBbCcDd1
+    enrolled_at:
+      type: string
+      description: The enrolment date, a zone-less wall clock in DHIS2's vocabulary.
+      default: "2026-09-01"
+
+steps:
+  # The register answers exactly three search parameters -- identifier, _tag and d2-attribute
+  # -- and REFUSES anything else with a 400 naming the three, rather than ignoring it. That is
+  # the opposite of the definitional types, which ignore what they do not know: an unapplied
+  # filter on a register would otherwise answer with every person in the country.
+  find_patient:
+    block: http.request
+    config:
+      connection: fhir-facade
+      path: /Patient
+      method: GET
+      query:
+        identifier: "${params.search_identifier}"
+        _tag: "${params.tracked_entity_type}"
+        _count: 1
+      headers:
+        Accept: application/fhir+json
+
+  # Both attribute carriers are read here, and they union into one `attributes` array. The
+  # per-attribute identifier system ends in the attribute's own uid, so the uid is the last
+  # path segment of the system rather than a field of its own.
+  to_tracker_payload:
+    block: transform.jq
+    depends_on: [find_patient]
+    config:
+      input:
+        bundle: "${steps.find_patient.output.json_body}"
+        program: "${params.program}"
+        org_unit: "${params.org_unit}"
+        enrollment: "${params.enrollment_uid}"
+        enrolled_at: "${params.enrolled_at}"
+      program: |
+        . as {$bundle, $program, $org_unit, $enrollment, $enrolled_at}
+        | ($bundle.entry // [])[0].resource as $p
+        | if $p == null then error("the register answered no Patient for that identifier") else . end
+        | {trackedEntities: [{
+            trackedEntity: (
+              [$p.identifier[] | select(.system | endswith("/id/tracked-entity"))][0].value),
+            trackedEntityType: (
+              [$p.meta.tag[] | select(.system | endswith("/id/tracked-entity-type"))][0].code),
+            orgUnit: $org_unit,
+            attributes: (
+              [$p.identifier[]
+               | select(.system | contains("/tracked-entity-attribute/"))
+               | {attribute: (.system | split("/") | last), value: .value}]
+              + [($p.extension // [])[]
+                 | select(.url | endswith("/d2-tracked-entity-attribute-value"))
+                 | {attribute: ([.extension[] | select(.url == "attributeId").valueString][0]),
+                    value: ([.extension[] | select(.url == "value").valueString][0])}]),
+            enrollments: [{
+              enrollment: $enrollment,
+              program: $program,
+              orgUnit: $org_unit,
+              enrolledAt: $enrolled_at,
+              status: "ACTIVE"}]}]}
+
+  # A dry run on /api/tracker is importMode=VALIDATE. It is NOT dryRun=true -- that is
+  # /api/dataValueSets -- and reaching for the wrong spelling on either endpoint does not
+  # fail, it imports.
+  #
+  # A payload carrying `trackedEntities` implies CREATE_AND_UPDATE. Enrolling a person who
+  # already exists is a different document -- a top-level `enrollments` array with no
+  # trackedEntities wrapper, under plain CREATE -- because the wrapper would rewrite the
+  # person's owning org unit on the way past.
+  rehearse_import:
+    block: http.request
+    depends_on: [to_tracker_payload]
+    config:
+      connection: dhis2-demo
+      path: /api/tracker
+      method: POST
+      query:
+        importMode: VALIDATE
+      headers:
+        Content-Type: application/json
+      body: "${steps.to_tracker_payload.output.value}"
+      # /api/tracker answers an async job with 200 and a completed one with 200 or 409; the
+      # report is in the body either way, so a 409 is a verdict to read rather than a
+      # transport failure to fail the step on.
+      success_status: [200, 201, 409]
+
+  # The tracker import report, not the HTTP status. `status` is the instance's own word, and
+  # validationReport.errorReports names every refused object with its DHIS2 error code.
+  read_report:
+    block: transform.jq
+    depends_on: [rehearse_import]
+    config:
+      input: "${steps.rehearse_import.output.json_body}"
+      program: |
+        {status: .status,
+         stats: (.stats // .response.stats),
+         errors: [((.validationReport // .response.validationReport).errorReports // [])[]
+                  | {code: .errorCode, uid: .uid, message: .message}]}

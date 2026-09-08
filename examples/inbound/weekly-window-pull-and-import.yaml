@@ -1,0 +1,175 @@
+# A weekly pull bounded by the run's own window, not by "now".
+#
+# THE WINDOW IS THE POINT. A schedule says when the run starts; the window says what the run
+# covers. Monday's run is meant to read the week that just closed, and it must read exactly
+# that week whether it fires on time, fires an hour late after a worker restart, or is
+# backfilled next year. ${run.window.start} and ${run.window.end} are that interval, and
+# they are half-open -- start included, end excluded -- so consecutive firings tile the
+# timeline with no overlap and no gap. A pull bounded by "now minus seven days" has neither
+# property.
+#
+# Nothing in this document declares the window: the cadence at the bottom computes it. So an
+# ad hoc run has to be given one, and a run carrying none refuses the reference rather than
+# resolving it to nothing and asking the outside system for its entire history.
+#
+# The hops, and the shape at each one:
+#
+#   1. pull       -> the USGS earthquake catalogue, a GeoJSON FeatureCollection:
+#                    {type, metadata, features: [...]} -- one feature per event in the week
+#   2. reshape    -> {dataSet, dataValues: [{dataElement, period, orgUnit, value}]}: one
+#                    value, the week's event count, filed against the ISO week the window
+#                    opened in
+#   3. import     -> the instance's summary
+#   4. signed_off -> the sensor that waits for a person to sign the week off
+#
+# A public catalogue that takes an explicit time range is what makes this runnable with no
+# setup; the mechanism is the same for a district register or a lab system that takes
+# ?from=&to=. The catalogue's event counts stand in for a surveillance system's weekly case
+# counts -- that pairing is a stand-in and nothing else here is.
+#
+# A count of zero is a measurement and is imported as one -- the week genuinely had no
+# qualifying event. That is the opposite of the empty cell in csv-drop-to-data-values.yaml,
+# where nothing was reported at all.
+#
+#   dg run --local examples/inbound/weekly-window-pull-and-import.yaml \
+#     --window 2026-08-03..2026-08-10
+#   dg apply examples/inbound/weekly-window-pull-and-import.yaml
+#   dg backfill weekly-window-pull-and-import --schedule monday-morning \
+#     --from 2026-06-01T06:00:00Z --to 2026-08-31T06:00:00Z --dry-run
+
+format: dirigent/v1
+kind: pipeline
+code: weekly-window-pull-and-import
+name: A weekly windowed pull into DHIS2
+description: |
+  A Monday schedule whose runs pull the week that just closed -- `${run.window.start}` up
+  to but not including `${run.window.end}` -- reshape it into a data value set, import it,
+  and wait for the week to be signed off.
+
+tags: [inbound, dhis2, http, schedule, transform, cross-boundary]
+
+requires:
+  blocks:
+    - http.request
+    - transform.jq
+    - dhis2.data_value_set_import
+    - dhis2.data_set_complete
+
+connections:
+  dhis2-demo:
+    kind: dhis2
+    config:
+      base_url: https://play.im.dhis2.org/stable-2-43-1
+      basic_username: admin
+      basic_password: district
+      timeout: 60s
+  catalogue:
+    kind: http
+    config:
+      base_url: https://earthquake.usgs.gov
+      timeout: 60s
+
+params:
+  type: object
+  properties:
+    min_magnitude:
+      type: number
+      description: What counts as an event worth reporting; the schedule pins it per firing.
+      default: 5
+    data_element:
+      type: string
+      description: The uid the weekly count lands on; a weekly surveillance element.
+      default: UsSUX0cpKsH
+    org_unit:
+      type: string
+      description: The facility the weekly count is reported for.
+      default: DiszpKrYNg8
+    data_set:
+      type: string
+      description: The weekly data set the count belongs to, and whose sign-off closes it.
+      default: Nyh6laLdBEJ
+    dry_run:
+      type: boolean
+      description: Whether the instance validates the import and writes nothing.
+      default: true
+
+steps:
+  # Both ends of the interval go on the wire, because the outside system is the one that
+  # must not double-count: >= start and < end is the same half-open rule the window is.
+  pull:
+    block: http.request
+    config:
+      connection: catalogue
+      path: /fdsnws/event/1/query
+      method: GET
+      query:
+        format: geojson
+        starttime: "${run.window.start}"
+        endtime: "${run.window.end}"
+        minmagnitude: "${params.min_magnitude}"
+
+  # A DHIS2 weekly period is YYYYWnn, and getting there from an instant has two traps.
+  # strptime alone leaves the weekday and year-day fields empty, so the week number comes
+  # out wrong unless the parse is pushed through mktime|gmtime first; and DHIS2 writes W6,
+  # not W06, so the zero-padded %V is put through tonumber. The date is truncated to ten
+  # characters so the same program reads both an instant and a plain date.
+  reshape:
+    block: transform.jq
+    depends_on: [pull]
+    config:
+      input:
+        events: "${steps.pull.output.json_body}"
+        window_start: "${run.window.start}"
+        data_element: "${params.data_element}"
+        org_unit: "${params.org_unit}"
+        data_set: "${params.data_set}"
+      program: |
+        (.window_start[0:10] | strptime("%Y-%m-%d") | mktime | gmtime) as $opened
+        # The envelope names its data set because this element belongs to two of them, and
+        # an import that cannot tell which set a value is for refuses the whole document.
+        | {dataSet: .data_set,
+           dataValues: [{
+            dataElement: .data_element,
+            period: "\($opened | strftime("%G"))W\($opened | strftime("%V") | tonumber)",
+            orgUnit: .org_unit,
+            value: (.events.features | length | tostring)
+          }]}
+
+  import:
+    block: dhis2.data_value_set_import
+    depends_on: [reshape]
+    config:
+      connection: dhis2-demo
+      data_values: "${steps.reshape.output.value}"
+      dry_run: "${params.dry_run}"
+      # A backfilled week must land on top of whatever a previous run put there, because
+      # the catalogue revises events after the fact and the newer read is the truer one.
+      import_strategy: CREATE_AND_UPDATE
+
+  # Observes, never registers -- the same sensor, and the same reasoning, as
+  # parquet-lakehouse-to-dhis2.yaml. The period is read back off the document that was
+  # imported rather than derived a second time: one derivation, one truth.
+  signed_off:
+    block: dhis2.data_set_complete
+    depends_on: [import]
+    poll: 30m
+    deadline: 72h
+    on_timeout: skip
+    config:
+      connection: dhis2-demo
+      data_set: "${params.data_set}"
+      period: "${steps.reshape.output.value.dataValues.0.period}"
+      org_unit: "${params.org_unit}"
+
+triggers:
+  schedules:
+    - code: monday-morning
+      name: Monday, Freetown time
+      description: Reads the week that closed at six on Monday morning.
+      cron: "0 6 * * 1"
+      # The zone belongs to the schedule, so the window it derives is a week of the
+      # reporting country's clock rather than a fixed 168 hours from a server's idea of
+      # midnight.
+      timezone: Africa/Freetown
+      params:
+        min_magnitude: 5

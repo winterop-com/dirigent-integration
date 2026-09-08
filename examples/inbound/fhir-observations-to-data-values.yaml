@@ -1,0 +1,193 @@
+# A FHIR Observation feed reduced to DHIS2 aggregate values.
+#
+# FHIR keeps one Observation per measurement, coded in LOINC, about one patient. DHIS2's
+# aggregate side keeps one figure per data element, period and org unit. So the integration
+# is three decisions, and every FHIR-to-aggregate integration makes the same three:
+#
+#   the LOINC code   -> the data element, through a table this document carries. LOINC is
+#                       the sending vocabulary and a DHIS2 uid is the receiving one; nothing
+#                       derives one from the other, so the table is the mapping and there is
+#                       no clever way around writing it.
+#   effectiveDateTime-> the period, truncated to the DHIS2 month. FHIR timestamps an
+#                       instant; DHIS2 stores a reporting month.
+#   the org unit     -> NOT from the payload. A public FHIR server's Observations are about
+#                       patients, and a patient is not a facility. Which facility this feed
+#                       belongs to is knowledge the puller has and the payload does not, so
+#                       it is a parameter.
+#
+# The hops, and the shape at each one:
+#
+#   1. pull       -> a FHIR Bundle: {resourceType: "Bundle", entry: [{resource: {...}}]}
+#   2. flatten    -> one row per entry that has both a mapped LOINC code and a numeric
+#                    value; everything else is dropped, silently and on purpose
+#   3. aggregate  -> {dataValues: [...]}, one value per (element, period) pair, summed
+#   4. gate       -> refused unless the ids and periods are DHIS2's own
+#   5. import     -> the instance's summary
+#
+# HOW A COUNT IS AGGREGATED IS A CLINICAL DECISION, not a technical one. Summing is right
+# for doses given and wrong for a body temperature; an averaged indicator needs a different
+# last line, and the pack cannot know which. This one counts observations, which is the
+# reduction that is always defensible: how many were recorded.
+#
+# The default pull is the public HAPI test server, so the example runs with no setup. It
+# holds whatever the world has posted to it, so the feed is unpredictable in content and
+# perfectly predictable in shape -- which is the half this example teaches. If a run finds
+# nothing mappable, the gate refuses an empty set rather than importing nothing quietly.
+#
+# What makes it yours: fhir_base_url pointed at your server, the lookup table, and the
+# org unit.
+#
+#   dg run --local examples/inbound/fhir-observations-to-data-values.yaml
+#   dg run --local examples/inbound/fhir-observations-to-data-values.yaml -p count=50
+
+format: dirigent/v1
+kind: pipeline
+code: fhir-observations-to-data-values
+name: FHIR Observations into DHIS2
+description: |
+  Pull a FHIR Observation bundle, map LOINC codes onto DHIS2 data elements, reduce the
+  observations to monthly counts, and import them as a data value set.
+
+tags: [inbound, dhis2, http, transform, validate, cross-boundary]
+
+requires:
+  blocks:
+    - http.request
+    - transform.jq
+    - validate.schema
+    - dhis2.data_value_set_import
+
+connections:
+  dhis2-demo:
+    kind: dhis2
+    config:
+      base_url: https://play.im.dhis2.org/stable-2-43-1
+      basic_username: admin
+      basic_password: district
+      timeout: 60s
+  # The outside end is a connection rather than a bare url because a real FHIR server is
+  # authenticated and versioned, and both belong to the server rather than to the step.
+  fhir-server:
+    kind: http
+    config:
+      base_url: https://hapi.fhir.org/baseR4
+      timeout: 60s
+
+params:
+  type: object
+  properties:
+    count:
+      type: integer
+      description: How many Observations one page asks for; kept small so the demo is cheap.
+      default: 20
+      minimum: 1
+      maximum: 200
+    org_unit:
+      type: string
+      description: The facility this feed reports for, which the payload cannot say.
+      default: DiszpKrYNg8
+    loinc_to_data_element:
+      type: object
+      description: LOINC code on the left, DHIS2 data element uid on the right.
+      default:
+        "8302-2": x0PshcPLSk1
+        "29463-7": wZqi8EXN5x4
+    dry_run:
+      type: boolean
+      description: Whether the instance validates the import and writes nothing.
+      default: true
+
+schemas:
+  data-value-set:
+    type: object
+    required: [dataValues]
+    properties:
+      dataValues:
+        type: array
+        minItems: 1
+        items:
+          type: object
+          required: [dataElement, period, orgUnit, value]
+          properties:
+            dataElement: { type: string, format: dhis2-uid }
+            period: { type: string, format: dhis2-period }
+            orgUnit: { type: string, format: dhis2-uid }
+            value: { type: string }
+
+steps:
+  # _format=json because a FHIR server negotiates content and will answer XML to a client
+  # that does not say; _count bounds the page. A real feed pages with _getpages, which is a
+  # loop this example deliberately does not have.
+  pull:
+    block: http.request
+    config:
+      connection: fhir-server
+      path: /Observation
+      method: GET
+      query:
+        _count: "${params.count}"
+        _format: json
+
+  # One program, because the mapping needs the code and the timestamp of the same resource
+  # at once. Entries are dropped rather than defaulted at three points: no LOINC coding, no
+  # mapped uid, no effective instant. An observation that cannot be placed in a month at a
+  # data element is not an observation this instance can store.
+  flatten:
+    block: transform.jq
+    depends_on: [pull]
+    config:
+      input:
+        bundle: "${steps.pull.output.json_body}"
+        lookup: "${params.loinc_to_data_element}"
+      program: |
+        .lookup as $lookup
+        | [ .bundle.entry // []
+            | .[]
+            | .resource
+            | select(.resourceType == "Observation")
+            | (.effectiveDateTime // .issued) as $when
+            | select($when != null)
+            | (.code.coding // [])
+            | .[]
+            | select(.system == "http://loinc.org")
+            | select($lookup[.code] != null)
+            | {dataElement: $lookup[.code], period: ($when[0:7] | gsub("-"; ""))}
+          ]
+
+  # Counting, not summing a measured quantity: see the header. group_by leaves one group
+  # per distinct pair, and its length is how many observations landed in it.
+  aggregate:
+    block: transform.jq
+    depends_on: [flatten]
+    config:
+      input:
+        rows: "${steps.flatten.output.value}"
+        org_unit: "${params.org_unit}"
+      program: |
+        .org_unit as $ou
+        | {dataValues: [
+            .rows
+            | group_by([.dataElement, .period])[]
+            | {dataElement: .[0].dataElement,
+               period: .[0].period,
+               orgUnit: $ou,
+               value: (length | tostring)}
+          ]}
+
+  # minItems: 1 in the schema is the real work here: a feed that happened to carry nothing
+  # this instance knows fails the run visibly instead of importing an empty envelope and
+  # reporting success.
+  gate:
+    block: validate.schema
+    depends_on: [aggregate]
+    config:
+      input: "${steps.aggregate.output.value}"
+      schema: data-value-set
+
+  import:
+    block: dhis2.data_value_set_import
+    depends_on: [gate]
+    config:
+      connection: dhis2-demo
+      data_values: "${steps.gate.output.value}"
+      dry_run: "${params.dry_run}"

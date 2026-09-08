@@ -1,0 +1,222 @@
+# The code mapping fetched from the server at run time instead of written into the document.
+#
+# THE FLOW, END TO END. Fetch one ConceptMap off the FHIR server, turn its groups into a flat
+# lookup, and apply that lookup to the coded answers of a capture -- so the document carries no
+# codes at all and a mapping published today is in force tonight.
+#
+# THE POINT. questionnaire-response-to-data-values.yaml holds its table in params, which is
+# right when the mapping is a decision your project made. But a terminology mapping is not that:
+# it belongs to whoever publishes the terminology, and FHIR has a resource for exactly this.
+# A ConceptMap is a published, versioned, addressable translation between two code systems, and
+# a pipeline that fetches it can never drift from what the server means. When an option is
+# added to a DHIS2 option set, the regenerated ConceptMap has it, and NOTHING here changes.
+#
+# WHAT ARRIVES -- the map. `d2w fhir serve` publishes one ConceptMap per DHIS2 option set,
+# `d2-os-<optionSetUid>-cm`, with TWO groups distinguished by `group.target`:
+#
+#   {"resourceType": "ConceptMap", "id": "d2-os-cshsFEran9U-cm",
+#    "identifier": {"system": "http://dhis2.org/fhir/id/option-set", "value": "cshsFEran9U"},
+#    "group": [
+#      {"source": ".../CodeSystem/d2-os-cshsFEran9U-cs",
+#       "target": "http://dhis2.org/fhir/id/option",
+#       "element": [{"code": "YQe3PFbATvz", "display": "NVP only",
+#                    "target": [{"code": "YQe3PFbATvz", "equivalence": "equal"}]}]},
+#      {"source": ".../CodeSystem/d2-os-cshsFEran9U-cs",
+#       "target": "http://dhis2.org/fhir/id/option-code",
+#       "element": [{"code": "YQe3PFbATvz",
+#                    "target": [{"code": "NVP-only", "equivalence": "equal"}]}]}]}
+#
+# The uid group is always complete; the code group only covers options DHIS2 gave a code, so
+# it may be partial or missing entirely. `target_system` below picks which group is in force,
+# and picking the uid group is what makes this safe by default.
+#
+# WHAT ARRIVES -- the capture. A coded answer is a valueCoding naming a concept of the option
+# set's own CodeSystem, and it is the `code` that has to be translated:
+#
+#   {"linkId": "s46m5MS0hxu",
+#    "answer": [{"valueCoding": {"system": ".../d2-os-cshsFEran9U-cs",
+#                                "code": "dTVOMl2RHg3", "display": "AZT and NVP"}}]}
+#
+# WHAT LEAVES. The usual `/api/dataValueSets` document, its values translated:
+#
+#   {"dataSet": "lyLU2wR22tC", "period": "202608", "orgUnit": "dczh6Jfd4no",
+#    "dataValues": [{"dataElement": "s46m5MS0hxu", "value": "dTVOMl2RHg3"}]}
+#
+# WHERE A READER CHANGES IT. `concept_map_id` names the map, and `target_system` picks which
+# of its groups is authoritative -- `.../id/option` for DHIS2 uids, `.../id/option-code` for
+# DHIS2 codes. Neither the source codes nor the targets appear anywhere in this file.
+#
+# THE OTHER WAY. The facade also answers `GET /ConceptMap/$translate?system=&code=`, one
+# concept per call, returning Parameters with a `result` boolean and a `match` part. That is
+# the right shape for a handful of lookups and the wrong one for a bundle: fetching the map
+# once and applying it in-process is one request rather than one per answer.
+#
+#   dg run --local examples/fhir/fhir-conceptmap-driven-mapping.yaml
+#   dg run --local examples/fhir/fhir-conceptmap-driven-mapping.yaml \
+#     -p target_system=http://dhis2.org/fhir/id/option-code
+
+format: dirigent/v1
+kind: pipeline
+code: fhir-conceptmap-driven-mapping
+name: A ConceptMap drives the mapping
+description: |
+  Fetch a `ConceptMap` from the FHIR server, flatten it into a lookup, and translate a
+  capture's coded answers through it -- so no code appears in this document at all.
+
+  A `d2w fhir serve` option-set map carries two groups distinguished by `group.target`: one to
+  the DHIS2 option uid (always complete) and one to the DHIS2 option code (only where the
+  option has one). `target_system` picks which is in force.
+
+tags: [fhir, dhis2, cross-boundary]
+
+requires:
+  blocks:
+    - http.request
+    - value.const
+    - transform.jq
+    - dhis2.data_value_set_import
+
+connections:
+  fhir-facade:
+    kind: http
+    config:
+      base_url: http://localhost:8095
+      timeout: 30s
+  # The public DHIS2 play server, carried inline so this document runs standalone. Against an
+  # instance you own, name a connection that instance holds instead of carrying one.
+  dhis2-demo:
+    kind: dhis2
+    config:
+      base_url: https://play.im.dhis2.org/stable-2-43-1
+      basic_username: admin
+      basic_password: district
+      timeout: 60s
+
+params:
+  type: object
+  properties:
+    concept_map_id:
+      type: string
+      description: The published map. On this facade, d2-os-<optionSetUid>-cm.
+      default: d2-os-cshsFEran9U-cm
+    target_system:
+      type: string
+      description: Which group of the map is authoritative -- the uid group or the code group.
+      default: http://dhis2.org/fhir/id/option
+    data_set:
+      type: string
+      default: lyLU2wR22tC
+    org_unit:
+      type: string
+      default: dczh6Jfd4no
+    period:
+      type: string
+      default: "202608"
+
+steps:
+  # A read by id, not a search: a ConceptMap's id is stable and the read is byte-faithful to
+  # what the project published. `GET /ConceptMap?identifier=<option-set system>|<uid>` is the
+  # same map found the other way round, by the DHIS2 option set it came from.
+  fetch_map:
+    block: http.request
+    config:
+      connection: fhir-facade
+      path: "/ConceptMap/${params.concept_map_id}"
+      method: GET
+      headers:
+        Accept: application/fhir+json
+
+  # Groups in, one flat object out: source code -> target code. Only groups whose target is
+  # the system asked for contribute, so switching target_system switches the whole mapping
+  # without touching this program. `equivalence` is kept alongside the code because a map is
+  # allowed to say `wider` or `inexact`, and a translation that quietly used one of those
+  # would be reporting a different fact than the one that was captured.
+  build_lookup:
+    block: transform.jq
+    depends_on: [fetch_map]
+    config:
+      input:
+        map: "${steps.fetch_map.output.json_body}"
+        target_system: "${params.target_system}"
+      program: |
+        . as {$map, $target_system}
+        | [$map.group[] | select(.target == $target_system) | .element[]
+           | {key: .code,
+              value: {code: .target[0].code, equivalence: (.target[0].equivalence // "equal")}}]
+        | from_entries
+        | if . == {} then
+            error("\($target_system) is not a target group of this ConceptMap")
+          else . end
+
+  # The capture, inline so the document runs with nothing set up. Its answers are codes of the
+  # option set's own CodeSystem -- which is exactly the source side of the map fetched above.
+  receive:
+    block: value.const
+    config:
+      value:
+        - linkId: s46m5MS0hxu
+          code: dTVOMl2RHg3
+        - linkId: p1MDHOT6ENy
+          code: YQe3PFbATvz
+        # Coded against something this map has never heard of. It must not be invented into a
+        # value, and it must not disappear without a word either.
+        - linkId: cZnQDuF3IDz
+          code: NotAMappedCode
+
+  # The join. Both sides ride in on `input` -- the lookup as a value, not as text spliced into
+  # the program: a ${...} reference resolves into a jq program as Python's own rendering of the
+  # object, which is not jq syntax and does not compile. A program takes its data through
+  # input, always, and this is the step where that rule bites.
+  translate_answers:
+    block: transform.jq
+    depends_on: [build_lookup, receive]
+    config:
+      input:
+        answers: "${steps.receive.output.value}"
+        lookup: "${steps.build_lookup.output.value}"
+      program: |
+        . as {$answers, $lookup}
+        | [$answers[]
+           | . as $answer
+           | $lookup[$answer.code] as $hit
+           | {linkId: $answer.linkId,
+              source: $answer.code,
+              translated: $hit.code,
+              equivalence: $hit.equivalence}]
+
+  # Only `equal` becomes a data value. Anything else -- a wider match, a code the map does not
+  # carry -- is reported instead of imported, which is the whole reason the equivalence was
+  # carried this far.
+  to_data_values:
+    block: transform.jq
+    depends_on: [translate_answers]
+    config:
+      input:
+        answers: "${steps.translate_answers.output.value}"
+        data_set: "${params.data_set}"
+        org_unit: "${params.org_unit}"
+        period: "${params.period}"
+      program: |
+        . as {$answers, $data_set, $org_unit, $period}
+        | {document: {
+             dataSet: $data_set,
+             period: $period,
+             orgUnit: $org_unit,
+             dataValues: [$answers[]
+                          | select(.translated != null and .equivalence == "equal")
+                          | {dataElement: .linkId, value: .translated}]},
+           untranslated: [$answers[] | select(.translated == null) | .source],
+           inexact: [$answers[] | select(.translated != null and .equivalence != "equal")]}
+
+  # The translated set goes to DHIS2 as a rehearsal: dry_run is fixed on, because the point of
+  # this example is the mapping, and the import step is here so the whole leg is exercised
+  # against a real instance without writing to a shared one. Only the document is sent; the
+  # untranslated and inexact lists stay on the step above, where a reader looks for them.
+  rehearse:
+    block: dhis2.data_value_set_import
+    depends_on: [to_data_values]
+    config:
+      connection: dhis2-demo
+      data_values: ${steps.to_data_values.output.value.document}
+      dry_run: true
+      import_strategy: CREATE_AND_UPDATE

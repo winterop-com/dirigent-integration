@@ -1,0 +1,164 @@
+# A csv dropped in a bucket, picked up and imported: the file-drop integration.
+#
+# The commonest inbound shape there is. Somebody's system -- a district DHIS2-less register,
+# a lab machine, an export somebody mails weekly -- writes a csv into object storage, and
+# nothing tells the pipeline it happened. So the pipeline waits.
+#
+# The hops, and the shape at each one:
+#
+#   1. arrived  -> a sensor, not a read: it answers only once an object matching the glob is
+#                  there and at least min_size, and hands on that object's uri
+#   2. decode   -> the csv as JSON *text*: a codec answers text, always
+#   3. rows     -> that text parsed, each row carrying the data element uid the lookup gave
+#                  it, so the code-to-uid translation is done once and visibly
+#   4. values   -> one data value per row, DHIS2's four fields and nothing else
+#   5. kept     -> the same list minus the rows that carry no measurement
+#   6. import   -> the instance's summary
+#
+# The lookup is the part every deployment rewrites. It sits in its own value.const step
+# because that is where a reader looks for it: the sending system's column codes on the
+# left, this instance's uids on the right, and a row whose code is not in the table falls
+# out at the filter rather than importing under a null id.
+#
+# THE FILTER IS NOT TIDYING. An empty cell means the facility did not report, and a 0 means
+# it reported none. Importing the first as the second invents data, so the empty ones are
+# dropped and the gap stays a gap.
+#
+# What makes it yours: the bucket and prefix, the lookup table, and the period column. The
+# s3:// scheme needs an s3 connection bound to it as an instance setting
+# (storage_connections: {s3: <code>}), exactly as examples/s3 in the dirigent repository
+# sets up; the drop directory can equally be file:// on a worker's disk.
+#
+#   dg run --local examples/inbound/csv-drop-to-data-values.yaml -p day=2026-06-01
+
+format: dirigent/v1
+kind: pipeline
+code: csv-drop-to-data-values
+name: A csv drop into DHIS2
+description: |
+  Wait for a csv to land in object storage, decode it, translate the sender's codes into
+  DHIS2 uids, drop the rows that carry no measurement, and import what is left.
+
+tags: [inbound, dhis2, storage, transform, cross-boundary]
+
+requires:
+  blocks:
+    - storage.exists
+    - convert.std
+    - value.const
+    - transform.jq
+    - map.jq
+    - filter.jq
+    - dhis2.data_value_set_import
+  storage:
+    - s3
+
+connections:
+  dhis2-demo:
+    kind: dhis2
+    config:
+      base_url: https://play.im.dhis2.org/stable-2-43-1
+      basic_username: admin
+      basic_password: district
+      timeout: 60s
+
+params:
+  type: object
+  required: [day]
+  properties:
+    day:
+      type: string
+      format: date
+      description: The drop directory the sender writes into, one per day.
+    bucket:
+      type: string
+      description: The bucket the sending system drops into.
+      default: dirigent-inbound
+    dry_run:
+      type: boolean
+      description: Whether the instance validates the import and writes nothing.
+      default: true
+
+steps:
+  # A glob in the final segment, because the sender names the file and we do not. min_size
+  # is the guard against a half-written object: a multipart upload is visible before it is
+  # complete, and a zero-byte placeholder is not a csv.
+  arrived:
+    block: storage.exists
+    poll: 1m
+    deadline: 6h
+    on_timeout: skip
+    config:
+      uri: s3://${params.bucket}/drops/${params.day}/*.csv
+      min_size: 1b
+
+  # input_uri rather than input: the object stays in storage and only the decoded text
+  # rides on, so nothing about this step changes when the drop grows to a hundred thousand
+  # rows.
+  decode:
+    block: convert.std
+    depends_on: [arrived]
+    config:
+      input_uri: "${steps.arrived.output.uri}"
+      from: csv
+      to: json
+
+  # The sending system's vocabulary, translated. One place, one step, one thing to hand a
+  # DHIS2 administrator when a new indicator is added.
+  lookup:
+    block: value.const
+    config:
+      value:
+        PMTCT_EXPOSED_REGISTERED: x0PshcPLSk1
+        PMTCT_NVP_72H: wZqi8EXN5x4
+
+  # A codec answers text, so the program starts with fromjson. The uid is attached here,
+  # while the whole table is in scope; the per-row verbs below cannot see it, because a map
+  # program sees one element and nothing else.
+  rows:
+    block: transform.jq
+    depends_on: [decode, lookup]
+    config:
+      input:
+        csv: "${steps.decode.output.text}"
+        lookup: "${steps.lookup.output.value}"
+      program: |
+        .lookup as $lookup
+        | (.csv | fromjson)
+        | [.[] | . + {dataElement: $lookup[.element_code]}]
+
+  # Exactly one data value per row, and the list is as long as the one above it -- which is
+  # what map.jq guarantees and a transform.jq program would not.
+  values:
+    block: map.jq
+    depends_on: [rows]
+    config:
+      input: "${steps.rows.output.value}"
+      program: |
+        {dataElement, period: .period, orgUnit: .org_unit, value: .value}
+
+  # A subset, nothing edited. Two ways in: an unmapped code left dataElement null, and an
+  # empty cell left value "". jq truthiness is not applied here, so both tests are written
+  # out rather than leaning on a bare .value.
+  kept:
+    block: filter.jq
+    depends_on: [values]
+    config:
+      input: "${steps.values.output.value}"
+      program: |
+        .dataElement != null and .value != "" and .value != null
+
+  import:
+    block: dhis2.data_value_set_import
+    depends_on: [kept]
+    config:
+      connection: dhis2-demo
+      # The envelope is assembled here rather than in a step of its own: the list is the
+      # only part any earlier step had an opinion about.
+      data_values:
+        dataValues: "${steps.kept.output.value}"
+      dry_run: "${params.dry_run}"
+      # NONE takes the rows the instance accepts and reports the rest as conflicts. ALL,
+      # the default, refuses the whole file over one bad row -- the right choice when the
+      # drop is one facility's month and the wrong one when it is a district's backlog.
+      atomic_mode: NONE

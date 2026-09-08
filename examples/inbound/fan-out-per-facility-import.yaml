@@ -1,0 +1,202 @@
+# One pull per facility, one import for the district, and a report of who did not answer.
+#
+# A district collects from facilities that are up at different times and run different
+# software. The pull therefore fans out -- one call per facility, each its own attempt --
+# and the import does not.
+#
+# WHY THE FAN CONVERGES AT THE IMPORT. Two reasons, and both are worth knowing:
+#
+#   for_each is expanded when the run is created, so it may read params, run and item but
+#   never another step's output: the cardinality has to exist before anything executes. A
+#   step fanned over "the facilities that answered" is therefore not expressible, and
+#   should not be -- it would make the shape of the run depend on the weather.
+#
+#   A data value set carries orgUnit per value, so one document can hold every facility at
+#   once. Fifteen imports of one facility each would be fifteen round trips, fifteen
+#   summaries to reconcile, and no gain.
+#
+# The hops, and the shape at each one:
+#
+#   1. pull        -> fanned: one http.request per facility. The step's output is the LIST
+#                     of its items' outputs, in item order, and A FAILED ITEM IS ABSENT
+#                     FROM IT -- not null, absent. So the list is shorter than the facility
+#                     list exactly when something went wrong
+#   2. per_facility-> fanned the same way, over the same params: one facility's rows,
+#                     already carrying its orgUnit
+#   3. batch       -> {dataValues: [...]}, every facility's values in one envelope
+#   4. import      -> one summary for the district
+#   5. reconcile   -> asked for, answered, missing -- computed from the two lists rather
+#                     than from anything the import said
+#   6. notify      -> that reconciliation POSTed where a person will see it
+#
+# items: continue is what makes a facility that is down a line in the report instead of the
+# end of the run. Under the default, fail_fast, one unreachable facility would take the
+# other fourteen with it.
+#
+# The step after a tolerated fan-out still runs, because a fan-out that lost items counts
+# as succeeded and the run ends completed_with_errors. If EVERY facility fails, the step
+# failed, and everything downstream is skipped -- including the reconciliation, which is
+# the one case where the run's own status is the report.
+#
+# What makes it yours: the facilities list, the endpoint each one answers on, and where the
+# reconciliation is posted.
+#
+#   dg run --local examples/inbound/fan-out-per-facility-import.yaml
+#   dg run --local examples/inbound/fan-out-per-facility-import.yaml \
+#     -p facilities='[{"code":"ngelehun-chc","org_unit":"DiszpKrYNg8","reported":42}]'
+
+format: dirigent/v1
+kind: pipeline
+code: fan-out-per-facility-import
+name: A facility fan-out into one district import
+description: |
+  Pull one facility at a time, tolerate the ones that are down, import what answered as a
+  single data value set, and post a reconciliation of asked-for against imported.
+
+tags: [inbound, dhis2, http, graph, transform, cross-boundary]
+
+requires:
+  blocks:
+    - http.request
+    - transform.jq
+    - dhis2.data_value_set_import
+    - webhook.post
+
+connections:
+  dhis2-demo:
+    kind: dhis2
+    config:
+      base_url: https://play.im.dhis2.org/stable-2-43-1
+      basic_username: admin
+      basic_password: district
+      timeout: 60s
+
+params:
+  type: object
+  properties:
+    facilities:
+      type: array
+      description: The facilities to collect from; each carries the uid its values land on.
+      default:
+        - { code: ngelehun-chc, org_unit: DiszpKrYNg8, reported: 42 }
+        - { code: gbenikoro-mchp, org_unit: y77LiPqLMoq, reported: 17 }
+        - { code: dodo-kortuma-chp, org_unit: rwfuVQHnZJ5, reported: 8 }
+      items:
+        type: object
+        required: [code, org_unit, reported]
+        properties:
+          code: { type: string }
+          org_unit: { type: string }
+          # What that facility's register would answer. It rides in the request and comes
+          # back in the echo, so the example has a figure to import without pretending a
+          # public endpoint holds anyone's health data.
+          reported: { type: integer }
+    period:
+      type: string
+      description: The DHIS2 month being collected.
+      default: "202606"
+    data_element:
+      type: string
+      description: The uid each facility's figure lands on.
+      default: x0PshcPLSk1
+    report_url:
+      type: string
+      description: Where the reconciliation is POSTed.
+      default: https://postman-echo.com/post
+    dry_run:
+      type: boolean
+      description: Whether the instance validates the import and writes nothing.
+      default: true
+
+steps:
+  # ${item} is one element of the params list, so ${item.code} reaches into it. The facility
+  # endpoint stands in as an echo service that answers whatever it is asked -- the shape
+  # this step teaches is one call per facility, not what that call returns.
+  pull:
+    block: http.request
+    for_each: "${params.facilities}"
+    items: continue
+    config:
+      url: https://postman-echo.com/get
+      method: GET
+      query:
+        facility: "${item.code}"
+        period: "${params.period}"
+        reported: "${item.reported}"
+
+  # Fanned over the same params list, so item and the pull's list line up index for index
+  # -- while every item succeeded. That is exactly why the reconciliation below counts the
+  # pull's own output rather than assuming this step saw everything.
+  per_facility:
+    block: transform.jq
+    depends_on: [pull]
+    for_each: "${params.facilities}"
+    items: continue
+    config:
+      input:
+        facility: "${item}"
+        answers: "${steps.pull.output}"
+        period: "${params.period}"
+        data_element: "${params.data_element}"
+      program: |
+        . as {$facility, $answers, $period, $data_element}
+        | [$answers[] | select(.json_body.args.facility == $facility.code)] as $mine
+        | [$mine[]
+           | {dataElement: $data_element,
+              period: $period,
+              orgUnit: $facility.org_unit,
+              value: (.json_body.args.reported | tostring)}]
+
+  # The fan-in. A fanned step's output is a list of its items' output objects, so the value
+  # each one carries is unwrapped once here before the lists are concatenated.
+  batch:
+    block: transform.jq
+    depends_on: [per_facility]
+    config:
+      input: "${steps.per_facility.output}"
+      program: |
+        {dataValues: [.[] | .value[]]}
+
+  import:
+    block: dhis2.data_value_set_import
+    depends_on: [batch]
+    config:
+      connection: dhis2-demo
+      data_values: "${steps.batch.output.value}"
+      dry_run: "${params.dry_run}"
+      # One facility's bad row must not cost the district its import; the conflicts come
+      # back in the summary and are reported rather than thrown away.
+      atomic_mode: NONE
+
+  # The honest reconciliation reads BOTH sides: what was asked for is the params list, what
+  # answered is the pull's surviving items, and the difference is the facilities nobody has
+  # heard from. The import summary cannot supply that -- it only ever saw what arrived.
+  reconcile:
+    block: transform.jq
+    depends_on: [import]
+    config:
+      input:
+        asked: "${params.facilities}"
+        answered: "${steps.pull.output}"
+        summary: "${steps.import.output}"
+        period: "${params.period}"
+      program: |
+        [.answered[] | .json_body.args.facility] as $codes
+        | {period: .period,
+           facilities_asked: (.asked | length),
+           facilities_answered: ($codes | length),
+           missing: [.asked[] | select(.code as $c | $codes | index($c) | not) | .code],
+           imported: .summary.imported,
+           updated: .summary.updated,
+           ignored: .summary.ignored,
+           conflicts: (.summary.conflicts | length)}
+
+  # A collection run nobody reads is a collection run nobody trusts. The body is the
+  # reconciliation exactly as computed; sign_with names a connection holding an hmac_secret
+  # when the receiver checks signatures.
+  notify:
+    block: webhook.post
+    depends_on: [reconcile]
+    config:
+      url: "${params.report_url}"
+      body: "${steps.reconcile.output.value}"

@@ -1,0 +1,130 @@
+name: dirigent-full
+
+# The batteries-included stack: the same four services as dirigent's own compose.yaml, running
+# the image built from this repo -- dirigent plus every official pack -- and seeding the
+# cross-boundary examples authored here.
+#
+# Run it from the repository root, so the relative paths below resolve there:
+#
+#   docker compose --project-directory . -f infra/compose.yaml up --build
+#
+# The build fetches the components over public HTTPS, so GITHUB_TOKEN may stay empty; it is
+# needed only when a component repository is private. To run an image built elsewhere, set
+# DIRIGENT_FULL_IMAGE to it and pass --no-build.
+
+secrets:
+  github_token:
+    environment: GITHUB_TOKEN
+
+x-dirigent: &dirigent
+  build:
+    context: .
+    dockerfile: infra/Dockerfile
+    secrets:
+      - github_token
+  image: ${DIRIGENT_FULL_IMAGE:-dirigent-full:local}
+  restart: unless-stopped
+  environment: &dirigent-env
+    DIRIGENT_DATABASE_URL: ${DIRIGENT_DATABASE_URL:-postgresql+asyncpg://${POSTGRES_USER:-dirigent}:${POSTGRES_PASSWORD:-dirigent}@postgres:5432/${POSTGRES_DB:-dirigent}}
+    DIRIGENT_CONFIG_FILE: /etc/dirigent/dirigent.yaml
+    DIRIGENT_SECRET_KEY: ${DIRIGENT_SECRET_KEY:?set DIRIGENT_SECRET_KEY in .env; see .env.example}
+    DIRIGENT_ENVIRONMENT: ${DIRIGENT_ENVIRONMENT:-prod}
+    DIRIGENT_LOG_LEVEL: ${DIRIGENT_LOG_LEVEL:-INFO}
+    DIRIGENT_LOG_FORMAT: json
+    DIRIGENT_ARTIFACT_ROOT: file:///var/lib/dirigent/artifacts
+    DIRIGENT_ENABLED_UNSAFE_BLOCKS: ${DIRIGENT_ENABLED_UNSAFE_BLOCKS:-}
+    # Pool plus overflow must stay above DIRIGENT_WORKER_CONCURRENCY, which the instance
+    # enforces at start-up.
+    DIRIGENT_DATABASE_POOL_SIZE: ${DIRIGENT_DATABASE_POOL_SIZE:-12}
+    DIRIGENT_DATABASE_MAX_OVERFLOW: ${DIRIGENT_DATABASE_MAX_OVERFLOW:-4}
+    # The alert context is built by whichever worker settles the run, so this belongs on
+    # every service. Set on the server alone, every alert links to nowhere.
+    DIRIGENT_ALERT_BASE_URL: ${DIRIGENT_ALERT_BASE_URL:-http://localhost:3333}
+    # Engine spans and metrics are recorded on the worker, so these belong on every service.
+    OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+    OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-dirigent-full}
+  volumes:
+    # A step's output must be readable by whichever worker claims the next step, so the
+    # artifact root is one shared volume rather than one per container.
+    - artifacts:/var/lib/dirigent/artifacts
+    - ./dirigent.yaml:/etc/dirigent/dirigent.yaml:ro
+  depends_on:
+    postgres:
+      condition: service_healthy
+    migrate:
+      condition: service_completed_successfully
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-dirigent}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dirigent}
+      POSTGRES_DB: ${POSTGRES_DB:-dirigent}
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    healthcheck:
+      # -d and -U are both given: without them pg_isready answers about the wrong database
+      # and reports ready while the one dirigent uses is still being created on first start.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dirigent} -d ${POSTGRES_DB:-dirigent}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    ports:
+      # Bound to loopback: the stack reaches postgres over the compose network, and the
+      # mapping exists only so a person on the host can inspect the database.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+
+  # A one-shot service rather than a step in the server's start-up, so scaling the server
+  # out does not race N processes against the same schema.
+  migrate:
+    <<: *dirigent
+    restart: "no"
+    command: ["db", "upgrade"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  server:
+    <<: *dirigent
+    command: ["server"]
+    environment:
+      <<: *dirigent-env
+      DIRIGENT_BOOTSTRAP_ADMIN_PASSWORD: ${DIRIGENT_BOOTSTRAP_ADMIN_PASSWORD:-}
+      DIRIGENT_SCHEDULER_ENABLED: ${DIRIGENT_SCHEDULER_ENABLED:-true}
+      # The cross-boundary examples seed at boot: what an instance will not store -- a document
+      # carrying its own connections -- is refused in the boot log, and the rest lands.
+      DIRIGENT_APPLY_DIR: ${DIRIGENT_APPLY_DIR:-/etc/dirigent/pipelines}
+      DIRIGENT_APPLY_PRUNE: ${DIRIGENT_APPLY_PRUNE:-false}
+    volumes:
+      - artifacts:/var/lib/dirigent/artifacts
+      - ./dirigent.yaml:/etc/dirigent/dirigent.yaml:ro
+      - ./examples:/etc/dirigent/pipelines:ro
+    ports:
+      - "${DIRIGENT_PORT:-3333}:3333"
+    healthcheck:
+      test: ["CMD", "dg", "health", "server"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  worker:
+    <<: *dirigent
+    command: ["worker"]
+    environment:
+      <<: *dirigent-env
+      DIRIGENT_WORKER_CONCURRENCY: ${DIRIGENT_WORKER_CONCURRENCY:-8}
+    stop_grace_period: 60s
+    healthcheck:
+      test: ["CMD", "dg", "health", "worker"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  postgres:
+  artifacts:

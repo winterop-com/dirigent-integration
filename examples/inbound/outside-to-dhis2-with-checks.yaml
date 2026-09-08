@@ -1,0 +1,246 @@
+# The defensive version: every guard an inbound pipeline earns, and what each one is for.
+#
+# The other examples on this shelf show one mechanism each. This one is what a pipeline
+# looks like once it has been in production for a month and every guard has been paid for
+# by an incident.
+#
+# The guards, in the order the run meets them, and the failure each one buys off:
+#
+#   1. reachable  -- an http.ready sensor before the pull. A source that is restarting
+#                    answers 502 for ninety seconds, and a pull that runs into it is a
+#                    failed run and a page at 03:00. A sensor waits instead: "not yet" is
+#                    the expected answer, and each poke is one cheap read. on_timeout: skip
+#                    ends the run as skipped rather than failed, because a source that was
+#                    down all night is not this pipeline being broken.
+#   2. raw_gate   -- a schema on what arrived, BEFORE anything reads it. This is the guard
+#                    people leave out, and it is the one that catches the real disaster: a
+#                    source that has quietly started answering an error page, an empty
+#                    envelope, or a renamed field. Without it, the reshape below produces a
+#                    beautifully-formed data value set full of nulls.
+#   3. value_gate -- a schema on what was produced, AFTER the reshape. The raw gate checked
+#                    the sender; this one checks us. A jq program is code, and code with no
+#                    test between it and a live instance is code nobody has checked.
+#   4. rehearse   -- the import with dry_run: true. DHIS2 validates the whole document,
+#                    against its own metadata, and reports what it would have refused --
+#                    which no schema can know, because only the instance holds the list of
+#                    uids that exist and the periods that are still open.
+#   5. commit     -- the same import for real, behind the default all_success edge. It runs
+#                    only because the rehearsal came back clean; a rehearsal that failed
+#                    leaves this step skipped, and nothing was written.
+#   6. signed_off -- the completeness sensor, which observes and does not register.
+#
+# THE TWO SCHEMAS ARE NOT THE SAME SHAPE and neither is redundant. One describes the
+# outside system's vocabulary, the other describes DHIS2's, and the reshape between them is
+# the only thing that knows both. When a run fails, which gate it failed at says whose
+# problem it is: the raw gate is the sender's, the value gate is ours, the rehearsal is the
+# instance's metadata.
+#
+# The commit step is a rehearsal too until you say otherwise: commit_dry_run defaults to
+# true so this document is safe against the shared play server, and the second import
+# becomes real by setting it false against an instance of your own.
+#
+#   dg run --local examples/inbound/outside-to-dhis2-with-checks.yaml
+#   dg run --local examples/inbound/outside-to-dhis2-with-checks.yaml -p commit_dry_run=false
+
+format: dirigent/v1
+kind: pipeline
+code: outside-to-dhis2-with-checks
+name: An inbound pipeline with every guard
+description: |
+  A readiness sensor, a schema on what arrived, a schema on what was built, a rehearsed
+  import, the real import behind it, and the completeness sensor -- each guard buying off a
+  different failure.
+
+tags: [inbound, dhis2, http, sensor, transform, validate, cross-boundary]
+
+requires:
+  blocks:
+    - http.ready
+    - http.request
+    - transform.jq
+    - validate.schema
+    - dhis2.data_value_set_import
+    - dhis2.data_set_complete
+
+connections:
+  dhis2-demo:
+    kind: dhis2
+    config:
+      base_url: https://play.im.dhis2.org/stable-2-43-1
+      basic_username: admin
+      basic_password: district
+      timeout: 60s
+  source:
+    kind: http
+    config:
+      base_url: https://api.worldbank.org
+      timeout: 30s
+
+params:
+  type: object
+  properties:
+    indicator_path:
+      type: string
+      description: The outside feed's path on the source connection.
+      default: /v2/country/SLE/indicator/SP.POP.TOTL
+    data_element:
+      type: string
+      description: The uid every pulled observation lands on; Total Population, yearly.
+      default: WUg3MYWQ7pt
+    org_unit:
+      type: string
+      description: The facility the figure is reported for, and one the data set is assigned to.
+      default: DiszpKrYNg8
+    data_set:
+      type: string
+      description: The data set whose sign-off closes the reporting year.
+      default: aLpVgfXiz0f
+    commit_dry_run:
+      type: boolean
+      description: Whether the second import is still a rehearsal. False makes it real.
+      default: true
+
+schemas:
+  # The sender's shape, in the sender's vocabulary. It asserts the two facts the reshape
+  # depends on and nothing more: there is at least one observation, and each one carries a
+  # date and either a number or an explicit null. A schema that also pinned the fields the
+  # reshape ignores would fail every time the source added a column.
+  source-observations:
+    type: array
+    minItems: 1
+    items:
+      type: object
+      required: [date]
+      properties:
+        date: { type: string }
+        value: { type: [number, "null"] }
+
+  # DHIS2's shape, in DHIS2's vocabulary, with the pack's own format checkers doing the
+  # work: dhis2-uid and dhis2-period turn "a string" into "a string this instance will
+  # accept", which is what makes the gate worth having over a required-fields check.
+  data-value-set:
+    type: object
+    required: [dataValues]
+    properties:
+      dataValues:
+        type: array
+        minItems: 1
+        items:
+          type: object
+          required: [dataElement, period, orgUnit, value]
+          properties:
+            dataElement: { type: string, format: dhis2-uid }
+            period: { type: string, format: dhis2-period }
+            orgUnit: { type: string, format: dhis2-uid }
+            value: { type: string }
+
+steps:
+  # A readiness probe is not the pull: it asks the cheapest question the source answers,
+  # and expect_status left empty means any 2xx counts.
+  reachable:
+    block: http.ready
+    poll: 30s
+    deadline: 30m
+    on_timeout: skip
+    config:
+      connection: source
+      # A sensor has no query block: readiness is one fixed question, so what varies about
+      # it belongs in the path.
+      path: /v2/country/SLE?format=json
+      # A source that answers 200 with a maintenance page is caught here rather than three
+      # steps later, because ready means "answering correctly", not "answering".
+      contains: Sierra Leone
+
+  pull:
+    block: http.request
+    depends_on: [reachable]
+    config:
+      connection: source
+      path: "${params.indicator_path}"
+      method: GET
+      query:
+        format: json
+        per_page: 5
+      # A source having a bad day can answer megabytes of HTML. The cap fails the step
+      # honestly instead of holding it all in the worker.
+      max_response: 4mb
+
+  # The envelope is [metadata, observations], so the gate is pointed at the half that
+  # matters: an index into an existing structure is unambiguous, and checking the rows says
+  # more than checking that an array has two elements.
+  raw_gate:
+    block: validate.schema
+    depends_on: [pull]
+    config:
+      input: "${steps.pull.output.json_body.1}"
+      schema: source-observations
+
+  # Reads the GATE's output, not the pull's. Both hold the same bytes, and only one of them
+  # has been checked -- so every step past a gate provably received the shape it asserts.
+  reshape:
+    block: transform.jq
+    depends_on: [raw_gate]
+    config:
+      input:
+        observations: "${steps.raw_gate.output.value}"
+        data_element: "${params.data_element}"
+        org_unit: "${params.org_unit}"
+      program: |
+        .data_element as $de
+        | .org_unit as $ou
+        | {dataValues: [
+            .observations[]
+            | select(.value != null)
+            | {dataElement: $de, period: .date, orgUnit: $ou, value: (.value | tostring)}
+          ]}
+
+  value_gate:
+    block: validate.schema
+    depends_on: [reshape]
+    config:
+      input: "${steps.reshape.output.value}"
+      schema: data-value-set
+
+  # The instance's own verdict, at no cost: it parses the document, checks every uid and
+  # period against its metadata, and writes nothing. Its summary comes back parsed, so a
+  # conflict is a named object and value rather than a wall of JSON.
+  rehearse:
+    block: dhis2.data_value_set_import
+    depends_on: [value_gate]
+    config:
+      connection: dhis2-demo
+      data_values: "${steps.value_gate.output.value}"
+      dry_run: true
+      # ALL is deliberate here and only here: a rehearsal that quietly tolerates bad rows
+      # tells you nothing, so the rehearsal is asked to refuse on any conflict at all.
+      atomic_mode: ALL
+
+  # No rule: is written, because the default all_success is exactly the guard wanted -- a
+  # rehearsal that failed leaves this step skipped and the instance untouched. Writing
+  # rule: all_done here would undo every guard above it in one line.
+  commit:
+    block: dhis2.data_value_set_import
+    depends_on: [rehearse]
+    config:
+      connection: dhis2-demo
+      # The same document the rehearsal was given, from the same waypoint. Rebuilding it
+      # here would mean the thing that was validated and the thing that is written are two
+      # different objects that merely ought to agree.
+      data_values: "${steps.value_gate.output.value}"
+      dry_run: "${params.commit_dry_run}"
+      import_strategy: CREATE_AND_UPDATE
+
+  signed_off:
+    block: dhis2.data_set_complete
+    depends_on: [commit]
+    poll: 30m
+    deadline: 72h
+    on_timeout: skip
+    config:
+      connection: dhis2-demo
+      data_set: "${params.data_set}"
+      # The most recent period the pull covered -- the source lists newest first -- read
+      # back off the checked document rather than named a second time: a period written
+      # twice is a period that will disagree once.
+      period: "${steps.value_gate.output.value.dataValues.0.period}"
+      org_unit: "${params.org_unit}"

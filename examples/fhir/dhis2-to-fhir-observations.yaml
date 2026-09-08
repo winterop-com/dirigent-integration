@@ -1,0 +1,212 @@
+# The other direction: DHIS2 aggregate values published as a FHIR Bundle of Observations.
+#
+# THE FLOW, END TO END. Export one data value set from DHIS2, turn every data value into an
+# Observation, wrap them in a transaction Bundle, and POST that Bundle to a FHIR server.
+#
+# WHY IT IS HERE. Every other document on this shelf reads FHIR and writes DHIS2. This one is
+# the mirror, and a reader who has both in front of them can see what is symmetric and what is
+# not. What is symmetric: the value, the period, the org unit, the code. What is NOT: DHIS2
+# says "this cell of this data set for this period", one row; FHIR says "this observation about
+# this subject at this time", one resource. Aggregate goes to FHIR by inventing an Observation
+# per cell whose subject is a place rather than a person -- which is legal, and is what
+# `Observation.subject` referencing a Location means.
+#
+# WHAT ARRIVES. A `/api/dataValueSets` export:
+#
+#   {"dataSet": "BfMAe6Itzgt", "period": "202608", "orgUnit": "vSbt6cezomG",
+#    "dataValues": [{"dataElement": "s46m5MS0hxu", "period": "202608",
+#                    "orgUnit": "vSbt6cezomG", "categoryOptionCombo": "Prlt0C1RF0s",
+#                    "value": "12"}]}
+#
+# WHAT LEAVES. A transaction Bundle, one entry per data value:
+#
+#   {"resourceType": "Bundle", "type": "transaction",
+#    "entry": [{"request": {"method": "POST", "url": "Observation"},
+#               "resource": {
+#                 "resourceType": "Observation", "status": "final",
+#                 "identifier": [{"system": "http://dhis2.org/fhir/id/data-value",
+#                                 "value": "s46m5MS0hxu.Prlt0C1RF0s-202608-vSbt6cezomG"}],
+#                 "code": {"coding": [{"system": "http://dhis2.org/fhir/id/data-element",
+#                                      "code": "s46m5MS0hxu"}]},
+#                 "subject": {"reference": "Location/vSbt6cezomG"},
+#                 "effectivePeriod": {"start": "2026-08-01", "end": "2026-08-31"},
+#                 "valueQuantity": {"value": 12}}}]}
+#
+# WHICH FIELD BECOMES WHICH.
+#
+#   dataElement                     -> Observation.code.coding, system .../id/data-element
+#   categoryOptionCombo             -> a second coding, system .../id/category-option-combo,
+#                                      because the disaggregation is part of what was counted
+#   orgUnit                         -> Observation.subject, a Reference(Location)
+#   period                          -> Observation.effectivePeriod, resolved to real dates
+#   value                           -> valueQuantity.value, or valueString when it is not a number
+#   (dataElement.coc, period, ou)   -> Observation.identifier, so a re-publish updates rather
+#                                      than duplicates
+#
+# THAT IDENTIFIER IS THE WHOLE IDEMPOTENCY STORY. An aggregate cell has a natural key and FHIR
+# has a place to put it, so each entry uses `PUT` with a conditional-update url --
+# `Observation?identifier=<system>|<key>` -- rather than POST. Running this document twice
+# leaves one Observation per cell, not two. A server that does not implement conditional update
+# refuses the Bundle rather than silently duplicating, which is the right failure.
+#
+# WHERE A READER CHANGES IT. `data_set`, `period` and `org_unit` pick what is exported;
+# `identifier_base` is the system every identifier and code is minted under, and it must be the
+# same base the FHIR side of your project already uses.
+#
+#   dg run --local examples/fhir/dhis2-to-fhir-observations.yaml
+#   dg run --local examples/fhir/dhis2-to-fhir-observations.yaml -p period=202507
+
+format: dirigent/v1
+kind: pipeline
+code: dhis2-to-fhir-observations
+name: DHIS2 data values to FHIR Observations
+description: |
+  Export a DHIS2 data value set and publish it as a transaction `Bundle` of `Observation`
+  resources on a FHIR server.
+
+  The outbound half of this shelf. Each entry is a conditional update keyed on the aggregate
+  cell's natural key -- `(dataElement.categoryOptionCombo, period, orgUnit)` -- so publishing
+  twice updates rather than duplicates.
+
+tags: [fhir, dhis2, cross-boundary]
+
+requires:
+  blocks:
+    - dhis2.data_value_set_export
+    - transform.jq
+    - http.request
+
+connections:
+  dhis2-demo:
+    kind: dhis2
+    config:
+      base_url: https://play.im.dhis2.org/stable-2-43-1
+      basic_username: admin
+      basic_password: district
+      timeout: 60s
+  # A public FHIR R4 sandbox, open to anyone, which is exactly why the Bundle below is keyed:
+  # a shared server that everybody publishes to is where duplicate-on-republish shows up first.
+  fhir-target:
+    kind: http
+    config:
+      base_url: https://hapi.fhir.org/baseR4
+      timeout: 60s
+
+params:
+  type: object
+  properties:
+    data_set:
+      type: string
+      default: BfMAe6Itzgt
+    period:
+      type: string
+      description: A DHIS2 ISO period. The Observation carries the dates it resolves to.
+      default: "202608"
+    org_unit:
+      type: string
+      default: vSbt6cezomG
+    identifier_base:
+      type: string
+      description: The system every minted identifier and code hangs off. Match it to whatever
+        the FHIR side of your project already publishes under.
+      default: http://dhis2.org/fhir
+
+steps:
+  # Inline rather than save_to: this set is one org unit for one month, and the next step is a
+  # jq program that wants the document as a value. A national export over a year is the case
+  # for streaming it to storage and handing on a body_uri instead.
+  export:
+    block: dhis2.data_value_set_export
+    config:
+      connection: dhis2-demo
+      data_set: "${params.data_set}"
+      period: "${params.period}"
+      org_unit: "${params.org_unit}"
+      children: false
+
+  to_observation_bundle:
+    block: transform.jq
+    depends_on: [export]
+    config:
+      input:
+        export: "${steps.export.output.json_body}"
+        base: "${params.identifier_base}"
+        period: "${params.period}"
+        org_unit: "${params.org_unit}"
+      program: |
+        . as {$export, $base, $period, $org_unit}
+        # A DHIS2 monthly period is yyyyMM and carries no dates, so the range is derived. Only
+        # Monthly is handled here; a quarterly or weekly set needs its own arm, which is the
+        # honest shape -- there are 23 DHIS2 period types and none of them is guessable.
+        | ($period | .[0:4]) as $year
+        | ($period | .[4:6]) as $month
+        | (if ($period | length) == 6 then
+             {start: "\($year)-\($month)-01",
+              end: ("\($year)-\($month)-01" | strptime("%Y-%m-%d") | mktime
+                    | . + (32 * 86400) | strftime("%Y-%m-01")
+                    | strptime("%Y-%m-%d") | mktime | . - 86400 | strftime("%Y-%m-%d"))}
+           else null end) as $range
+        | {resourceType: "Bundle",
+           type: "transaction",
+           entry: [($export.dataValues // [])[]
+             | . as $v
+             | (if .categoryOptionCombo
+                then "\(.dataElement).\(.categoryOptionCombo)" else .dataElement end) as $cell
+             # A data value repeats the envelope's period and org unit only when the export
+             # broke them down; a single-cell-block export leaves them off every row, and the
+             # envelope is then the only place they are. Both are read with that fallback.
+             | ($v.period // $export.period // $period) as $value_period
+             | ($v.orgUnit // $export.orgUnit // $org_unit) as $value_org_unit
+             | "\($cell)-\($value_period)-\($value_org_unit)" as $key
+             | {# A conditional update, not a create: the natural key decides identity, so the
+                # server updates the Observation that already carries it or creates the first.
+                request: {method: "PUT",
+                          url: "Observation?identifier=\($base)/id/data-value|\($key)"},
+                resource: ({
+                  resourceType: "Observation",
+                  status: "final",
+                  identifier: [{system: "\($base)/id/data-value", value: $key}],
+                  code: {coding: (
+                    [{system: "\($base)/id/data-element", code: $v.dataElement}]
+                    + (if $v.categoryOptionCombo
+                       then [{system: "\($base)/id/category-option-combo",
+                              code: $v.categoryOptionCombo}] else [] end))},
+                  subject: {reference: "Location/\($value_org_unit)"}}
+                  + (if $range then {effectivePeriod: $range} else {} end)
+                  # A DHIS2 value is always a string on the wire. A number becomes a Quantity
+                  # and anything else stays a string, because coercing a coded answer or a
+                  # free-text comment into a number would be inventing a measurement.
+                  + (if ($v.value | tonumber? ) != null
+                     then {valueQuantity: {value: ($v.value | tonumber)}}
+                     else {valueString: $v.value} end))}]}
+
+  # A transaction is all-or-nothing: the server applies every entry or none of them, and
+  # answers a transaction-response Bundle with one entry per request. That is the right
+  # granularity for one org unit and one period -- the whole month lands or the whole month
+  # does not -- and the wrong one for a year, which wants a batch per period instead.
+  publish:
+    block: http.request
+    depends_on: [to_observation_bundle]
+    config:
+      connection: fhir-target
+      path: /
+      method: POST
+      headers:
+        Content-Type: application/fhir+json
+        Accept: application/fhir+json
+      body: "${steps.to_observation_bundle.output.value}"
+
+  # The transaction response, read as a verdict rather than a status code: each entry carries
+  # its own `response.status`, and a 201 and a 200 mean created and updated respectively.
+  receipt:
+    block: transform.jq
+    depends_on: [publish]
+    config:
+      input: "${steps.publish.output.json_body}"
+      program: |
+        {bundle: .type,
+         entries: ((.entry // []) | length),
+         created: [(.entry // [])[] | select(.response.status | startswith("201"))] | length,
+         updated: [(.entry // [])[] | select(.response.status | startswith("200"))] | length,
+         issues: [(.entry // [])[] | select(.response.outcome.issue != null)
+                  | .response.outcome.issue[] | {severity, code, diagnostics}]}

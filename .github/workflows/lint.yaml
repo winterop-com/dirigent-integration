@@ -1,0 +1,25 @@
+# A cheap per-commit check so every push gets a status, without assembling the ecosystem.
+# The full assembled run (clone every pack, install, run all suites) stays in ci.yaml on a
+# nightly schedule + manual dispatch -- this only lints the integration repo's own sources
+# and confirms the manifest parses, cloning nothing.
+name: lint
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint:
+    name: lint + manifest
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          cache-dependency-glob: "**/pyproject.toml"
+      - name: Ruff
+        run: |
+          uv run --no-project --with ruff ruff check scripts tests
+          uv run --no-project --with ruff ruff format --check scripts tests
+      - name: Manifest parses
+        run: uv run --no-project --with pyyaml python -c "import yaml; yaml.safe_load(open('ecosystem.yaml')); print('ecosystem.yaml ok')"

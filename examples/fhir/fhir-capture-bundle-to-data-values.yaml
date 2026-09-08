@@ -1,0 +1,230 @@
+# A page of captures pulled off a FHIR facade and imported into DHIS2 as aggregate values.
+#
+# THE FLOW, END TO END. `d2w fhir serve` publishes one DHIS2 instance as a FHIR endpoint and
+# takes captures back. This document reads the captures it is holding for one aggregate form,
+# turns them into DHIS2's own `/api/dataValueSets` envelope, gates that envelope on DHIS2's id
+# and period formats, rehearses the import as a dry run, and only then writes it.
+#
+# THE CAPTURE PAIR. The facade's whole capture surface is two resource types, and the pair is
+# the thing to learn:
+#
+#   Questionnaire          the form DEFINITION, generated from DHIS2 metadata. One per
+#                          aggregate data set, event program, tracker program, program stage,
+#                          or tracked entity type. Its `item.linkId` values ARE DHIS2 uids.
+#   QuestionnaireResponse  one SUBMISSION against that form: it points at the form through
+#                          `questionnaire`, names a `subject`, and answers item by item on the
+#                          same linkIds. One aggregate response is exactly one DHIS2
+#                          (data set, org unit, period, attribute option combo) cell block.
+#
+# Because the linkIds are DHIS2 uids, a response is readable back into DHIS2 without consulting
+# the form -- which is what makes the jq below short.
+#
+# WHAT ARRIVES. One searchset Bundle of aggregate responses, each shaped like this:
+#
+#   {"resourceType": "QuestionnaireResponse",
+#    "questionnaire": "http://example.org/fhir/Questionnaire/lyLU2wR22tC",
+#    "status": "completed",
+#    "subject": {"reference": "Location/dczh6Jfd4no"},
+#    "extension": [
+#      {"url": ".../d2-period",
+#       "extension": [{"url": "iso", "valueString": "202608"},
+#                     {"url": "type", "valueCode": "Monthly"}]},
+#      {"url": ".../d2-attribute-option-combo",
+#       "valueCoding": {"code": "N7QFN41eTN8"}}],
+#    "item": [{"linkId": "GMd99K8gVut",
+#              "item": [{"linkId": "GMd99K8gVut.qNCMOhkoQju",
+#                        "answer": [{"valueDecimal": 426.3}]}]}]}
+#
+# WHAT LEAVES. One `/api/dataValueSets` document per response:
+#
+#   {"dataSet": "lyLU2wR22tC", "period": "202608", "orgUnit": "dczh6Jfd4no",
+#    "attributeOptionCombo": "N7QFN41eTN8",
+#    "dataValues": [{"dataElement": "GMd99K8gVut",
+#                    "categoryOptionCombo": "qNCMOhkoQju", "value": "426.3"}]}
+#
+# WHICH CODE BECOMES WHAT. Five rules, and every one of them is a field a reader changes:
+#
+#   questionnaire canonical, last segment    -> dataSet
+#   D2Period extension, its `iso` slice      -> period    (a DHIS2 ISO period, not a date range)
+#   subject.reference "Location/<uid>"       -> orgUnit
+#   D2AttributeOptionCombo coding's code     -> attributeOptionCombo
+#   an answered linkId "<de>" or "<de>.<coc>" -> one dataValue, split on the dot
+#
+# That dotted linkId is the entire disaggregation mapping: a plain linkId is a data element,
+# and a dotted one is one (dataElement, categoryOptionCombo) cell of it.
+#
+# WHERE A READER CHANGES IT. `questionnaire` names the form; on this facade that is a DHIS2
+# data set uid. Point `fhir_base` at your own `d2w fhir serve`, set `questionnaire_uid` to the
+# data set you generated a form from, and repoint the `dhis2` connection.
+#
+# WHAT THIS DOES NOT DO. It does not invent values for unanswered items -- an absent answer and
+# a zero are different facts -- and it does not register completeness. Completeness is a second
+# write, keyed by (data set, period, org unit, attribute option combo), and it must follow the
+# values rather than accompany them.
+#
+#   dg run --local examples/fhir/fhir-capture-bundle-to-data-values.yaml
+#   dg run --local examples/fhir/fhir-capture-bundle-to-data-values.yaml -p fhir_base=http://localhost:8096
+
+format: dirigent/v1
+kind: pipeline
+code: fhir-capture-bundle-to-data-values
+name: FHIR captures to DHIS2 data values
+description: |
+  Read a page of `QuestionnaireResponse` captures off a `d2w fhir serve` facade and import
+  them into DHIS2 as aggregate data values, rehearsing the import first.
+
+  The capture pair is the vocabulary: a `Questionnaire` is the form definition generated from
+  DHIS2 metadata, and a `QuestionnaireResponse` is one submission against it. Every `linkId`
+  is a DHIS2 uid, and a dotted one, `<dataElement>.<categoryOptionCombo>`, is one
+  disaggregated cell.
+
+tags: [fhir, dhis2, cross-boundary]
+
+requires:
+  blocks:
+    - http.request
+    - transform.jq
+    - validate.schema
+    - dhis2.data_value_set_import
+
+connections:
+  # The facade. It takes no credential in the default single-user setup, so the connection
+  # carries only where it is; an instance running behind auth gets basic_username here.
+  fhir-facade:
+    kind: http
+    config:
+      base_url: http://localhost:8095
+      timeout: 30s
+  # The instance the values land in. This is the demo, which is for reading: the import below
+  # is a dry run against it, and repointing this connection is what makes the real one real.
+  dhis2-demo:
+    kind: dhis2
+    config:
+      base_url: https://play.im.dhis2.org/stable-2-43-1
+      basic_username: admin
+      basic_password: district
+      timeout: 60s
+
+params:
+  type: object
+  properties:
+    fhir_base:
+      type: string
+      description: The facade to read captures from.
+      default: http://localhost:8095
+    questionnaire_uid:
+      type: string
+      description: The aggregate form, which on this facade is the DHIS2 data set uid.
+      default: lyLU2wR22tC
+    page_size:
+      type: integer
+      description: How many captures one page holds; the facade caps this at 500.
+      default: 50
+
+schemas:
+  # The gate is the pack's own formats, not a shape check: dhis2-uid refuses anything that is
+  # not an 11-character DHIS2 uid, dhis2-period anything that is not an ISO period. A capture
+  # whose linkId was hand-edited fails here rather than at the instance.
+  dhis2-data-value-set:
+    type: object
+    required: [dataSet, period, orgUnit, dataValues]
+    properties:
+      dataSet: { type: string, format: dhis2-uid }
+      period: { type: string, format: dhis2-period }
+      orgUnit: { type: string, format: dhis2-uid }
+      attributeOptionCombo: { type: string, format: dhis2-uid }
+      dataValues:
+        type: array
+        items:
+          type: object
+          required: [dataElement, value]
+          properties:
+            dataElement: { type: string, format: dhis2-uid }
+            categoryOptionCombo: { type: string, format: dhis2-uid }
+            value: { type: string }
+
+steps:
+  # The facade's one paged search. `questionnaire` is the canonical of the form, so this asks
+  # for every capture against one data set's form and nothing else. There is no _lastUpdated
+  # here -- the store is a receipt spool, and its cursor is the opaque `page` token on the
+  # Bundle's next link, which is what fhir-nightly-window-sync.yaml pages a real server by.
+  read_captures:
+    block: http.request
+    config:
+      connection: fhir-facade
+      path: /QuestionnaireResponse
+      method: GET
+      query:
+        questionnaire: "http://example.org/fhir/Questionnaire/${params.questionnaire_uid}"
+        _count: "${params.page_size}"
+      headers:
+        Accept: application/fhir+json
+
+  # One Bundle in, one DHIS2 document out. The whole response has to be visible at once,
+  # because the envelope comes from the extensions and the subject while the values come from
+  # the items, so this is one program rather than a map over the entries.
+  #
+  # Only `completed` responses are translated. An aggregate response that is still in-progress
+  # is a half-filled form, and importing one would claim a reporting period is answered.
+  to_data_value_set:
+    block: transform.jq
+    depends_on: [read_captures]
+    config:
+      input: "${steps.read_captures.output.json_body}"
+      program: |
+        [.entry[]?.resource | select(.status == "completed")]
+        | .[0] as $r
+        | ($r.extension[] | select(.url | endswith("/d2-period")).extension[]
+           | select(.url == "iso").valueString) as $period
+        # Items nest one level per section and one per disaggregated data element, so the
+        # leaves are found by recursion. An item carrying no answer is skipped entirely: a
+        # question that was asked and not answered must not import a zero.
+        | {dataSet: ($r.questionnaire | split("/") | last),
+           period: $period,
+           orgUnit: ($r.subject.reference | ltrimstr("Location/")),
+           attributeOptionCombo: (
+             [$r.extension[] | select(.url | endswith("/d2-attribute-option-combo"))][0]
+             | .valueCoding.code),
+           dataValues: [
+             $r.item[] | recurse(.item[]?)
+             | select((.answer // []) | length > 0)
+             | (.linkId | split(".")) as $key
+             | (.answer[0] | (.valueDecimal // .valueInteger // .valueString // .valueBoolean)) as $v
+             | {dataElement: $key[0], value: ($v | tostring)}
+               + (if ($key | length) > 1 then {categoryOptionCombo: $key[1]} else {} end)]}
+        | del(.attributeOptionCombo | select(. == null))
+
+  # The gate is also the waypoint: every step past it references the validated value, so the
+  # import provably received a document whose ids and period the formats admit.
+  gate:
+    block: validate.schema
+    depends_on: [to_data_value_set]
+    config:
+      input: "${steps.to_data_value_set.output.value}"
+      schema: dhis2-data-value-set
+
+  # Dry run first, always. On /api/dataValueSets a dry run is dryRun=true; on /api/tracker the
+  # same intention is importMode=VALIDATE, and on /api/metadata it is importMode=VALIDATE too.
+  # Reaching for the wrong spelling does not fail -- it imports.
+  rehearse:
+    block: dhis2.data_value_set_import
+    depends_on: [gate]
+    config:
+      connection: dhis2-demo
+      data_values: "${steps.gate.output.value}"
+      dry_run: true
+      # ALL means one refused value refuses the whole document, which is what a rehearsal
+      # wants: the answer is "would all of this land", not "how much of it".
+      atomic_mode: ALL
+
+  # Second, and only because the rehearsal passed. The default all_success edge is what
+  # enforces that: a refused rehearsal leaves this skipped rather than writing anyway.
+  import:
+    block: dhis2.data_value_set_import
+    depends_on: [rehearse]
+    config:
+      connection: dhis2-demo
+      data_values: "${steps.gate.output.value}"
+      dry_run: false
+      import_strategy: CREATE_AND_UPDATE
+      atomic_mode: ALL

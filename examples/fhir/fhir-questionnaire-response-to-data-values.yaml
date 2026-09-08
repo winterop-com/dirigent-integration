@@ -1,0 +1,187 @@
+# One QuestionnaireResponse mapped onto data elements by a linkId lookup the document carries.
+#
+# THE FLOW, END TO END. Read one capture off the facade by its receipt id, translate its
+# answers into data values through an explicit linkId-to-data-element table held in params,
+# and import the result -- dry run first.
+#
+# WHY A LOOKUP AT ALL. On a `d2w fhir serve` facade the linkIds already ARE DHIS2 uids, so
+# capture-bundle-to-data-values.yaml needs no table: it splits the dotted linkId and is done.
+# Every other FHIR server in the world uses linkIds a form designer chose -- "anc.visits.total",
+# "q3b", "weight_kg" -- and then the table IS the integration. This document is the general
+# case, and the facade is only where the example gets a real response to run against.
+#
+# WHAT ARRIVES. One QuestionnaireResponse, answers keyed by whatever the form calls them:
+#
+#   {"resourceType": "QuestionnaireResponse", "status": "completed",
+#    "subject": {"reference": "Location/dczh6Jfd4no"},
+#    "item": [{"linkId": "anc.visits.first", "answer": [{"valueInteger": 42}]},
+#             {"linkId": "anc.visits.followup", "answer": [{"valueInteger": 17}]},
+#             {"linkId": "anc.notes", "answer": [{"valueString": "clinic closed on the 4th"}]}]}
+#
+# WHAT LEAVES. The same `/api/dataValueSets` envelope every aggregate import wants:
+#
+#   {"dataSet": "lyLU2wR22tC", "period": "202608", "orgUnit": "dczh6Jfd4no",
+#    "dataValues": [{"dataElement": "GMd99K8gVut", "categoryOptionCombo": "qNCMOhkoQju",
+#                    "value": "42"}]}
+#
+# WHERE A READER CHANGES IT. `link_ids` below, and nowhere else. Each entry maps one linkId to
+# the DHIS2 cell it means: `data_element` alone for an undisaggregated data element, plus
+# `category_option_combo` for one column of a category combination. A linkId absent from the
+# table is dropped rather than guessed at, and the drop is counted and reported, because an
+# answer that silently vanishes is worse than an import that refuses.
+#
+#   dg run --local examples/fhir/fhir-questionnaire-response-to-data-values.yaml
+#   dg run --local examples/fhir/fhir-questionnaire-response-to-data-values.yaml -p period=202607
+
+format: dirigent/v1
+kind: pipeline
+code: fhir-questionnaire-response-to-data-values
+name: QuestionnaireResponse through a linkId table
+description: |
+  Map one `QuestionnaireResponse` onto DHIS2 data values through an explicit linkId lookup,
+  for the general case where a form's `linkId` is a designer's name rather than a DHIS2 uid.
+
+  A linkId the table does not name is dropped and counted, never guessed at.
+
+tags: [fhir, dhis2, cross-boundary]
+
+requires:
+  blocks:
+    - value.const
+    - transform.jq
+    - dhis2.data_value_set_import
+
+connections:
+  dhis2-demo:
+    kind: dhis2
+    config:
+      base_url: https://play.im.dhis2.org/stable-2-43-1
+      basic_username: admin
+      basic_password: district
+      timeout: 60s
+
+params:
+  type: object
+  properties:
+    data_set:
+      type: string
+      description: The DHIS2 data set the answers belong to.
+      default: lyLU2wR22tC
+    org_unit:
+      type: string
+      description: The org unit reporting, which a real capture reads off subject.reference.
+      default: dczh6Jfd4no
+    period:
+      type: string
+      description: The DHIS2 ISO period, which is a period identifier and not a date range.
+      default: "202608"
+    link_ids:
+      type: object
+      description: |
+        The mapping. One entry per linkId the form can answer: data_element on its own is an
+        undisaggregated data element, and category_option_combo names one column of a
+        category combination.
+      default:
+        anc.visits.first:
+          data_element: GMd99K8gVut
+          category_option_combo: qNCMOhkoQju
+        anc.visits.followup:
+          data_element: GMd99K8gVut
+          category_option_combo: LbeIlyHEhKr
+        anc.staff.count:
+          data_element: wfKKFhBn0Q0
+
+steps:
+  # The capture, written inline so the document runs with nothing set up. In service it is the
+  # body of a webhook delivery (fhir-subscription-webhook-to-dhis2.yaml) or one entry of a
+  # searchset Bundle (capture-bundle-to-data-values.yaml); either way this step's output is
+  # exactly one QuestionnaireResponse, and nothing downstream knows where it came from.
+  receive:
+    block: value.const
+    config:
+      value:
+        resourceType: QuestionnaireResponse
+        status: completed
+        authored: "2026-08-31T09:00:00Z"
+        questionnaire: http://example.org/fhir/Questionnaire/anc-monthly
+        subject:
+          reference: Location/dczh6Jfd4no
+        item:
+          - linkId: anc.visits.first
+            text: First antenatal visits
+            answer:
+              - valueInteger: 42
+          - linkId: anc.visits.followup
+            text: Follow-up antenatal visits
+            answer:
+              - valueInteger: 17
+          - linkId: anc.staff.count
+            text: Midwives on duty
+            answer:
+              - valueInteger: 3
+          # Answered, and mapped to nothing. It must not reach DHIS2, and it must not vanish
+          # in silence either: the translation counts it.
+          - linkId: anc.notes
+            text: Notes
+            answer:
+              - valueString: clinic closed on the 4th
+          # Asked and not answered. An absent answer and a zero are different facts.
+          - linkId: anc.visits.referred
+            text: Referrals
+
+  # The translation. It hands on the import document AND the drops beside it, so the receipt
+  # step below can report what did not map without re-deriving anything.
+  translate:
+    block: transform.jq
+    depends_on: [receive]
+    config:
+      input:
+        response: "${steps.receive.output.value}"
+        link_ids: "${params.link_ids}"
+        data_set: "${params.data_set}"
+        org_unit: "${params.org_unit}"
+        period: "${params.period}"
+      program: |
+        . as {$response, $link_ids, $data_set, $org_unit, $period}
+        | [$response.item[] | recurse(.item[]?) | select((.answer // []) | length > 0)] as $answered
+        | {document: {
+             dataSet: $data_set,
+             period: $period,
+             orgUnit: $org_unit,
+             dataValues: [
+               $answered[]
+               | select($link_ids[.linkId] != null)
+               | $link_ids[.linkId] as $cell
+               | (.answer[0] | (.valueDecimal // .valueInteger // .valueString // .valueBoolean)) as $v
+               | {dataElement: $cell.data_element, value: ($v | tostring)}
+                 + (if $cell.category_option_combo
+                    then {categoryOptionCombo: $cell.category_option_combo} else {} end)]},
+           unmapped: [$answered[] | select($link_ids[.linkId] == null) | .linkId]}
+
+  rehearse:
+    block: dhis2.data_value_set_import
+    depends_on: [translate]
+    config:
+      connection: dhis2-demo
+      data_values: "${steps.translate.output.value.document}"
+      # dryRun on /api/dataValueSets. The instance validates every value against the data set,
+      # the period and the org unit and reports conflicts, and writes nothing.
+      dry_run: true
+      atomic_mode: ALL
+
+  # What the run is for: the import summary's counts beside the linkIds nothing claimed. A
+  # growing `unmapped` list is the table falling behind the form, which is the failure mode
+  # this whole shape exists to make visible.
+  receipt:
+    block: transform.jq
+    depends_on: [rehearse]
+    config:
+      input:
+        summary: "${steps.rehearse.output}"
+        unmapped: "${steps.translate.output.value.unmapped}"
+      program: |
+        {rehearsed: .summary.status,
+         would_import: .summary.imported,
+         would_update: .summary.updated,
+         conflicts: (.summary.conflicts | length),
+         unmapped_link_ids: .unmapped}

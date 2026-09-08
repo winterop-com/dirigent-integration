@@ -1,0 +1,205 @@
+# A FHIR MeasureReport held against DHIS2 analytics for the same period, and the gap reported.
+#
+# THE FLOW, END TO END. Read a MeasureReport for one measure and one period off a FHIR server,
+# ask DHIS2's own analytics for the indicator that is supposed to say the same thing over the
+# same period and org unit, subtract one from the other, and POST the verdict to a receiver.
+#
+# WHY THIS EXISTS. Two systems computing the same number from the same events is the normal
+# state of a country's data, and the useful question is not "what is the number" but "do the
+# two agree, and by how much". This is a reconciliation, so it writes NOTHING to DHIS2 and it
+# is safe to run on a schedule.
+#
+# WHERE THE MEASUREREPORT COMES FROM. Not from `d2w fhir serve`: that facade publishes DHIS2 as
+# forms and captures and serves no Measure and no MeasureReport. A report is produced by
+# SCORING a measure -- a CQL library with the five conventional population defines (Initial
+# population, Denominator, Denominator exclusion, Numerator, Numerator exclusion) -- over a
+# Bundle of FHIR data, and a measure evaluation engine is what turns that scoring into an R4
+# MeasureReport. The report is then a resource like any other, so this document fetches it
+# from wherever it was published. `fhir_base` defaults to a public HAPI R4 sandbox.
+#
+# WHAT ARRIVES -- the report. A proportion measure scored over a period:
+#
+#   {"resourceType": "MeasureReport", "status": "complete", "type": "summary",
+#    "measure": "http://example.org/Measure/measles-coverage",
+#    "period": {"start": "2026-08-01", "end": "2026-08-31"},
+#    "group": [{"population": [
+#                 {"code": {"coding": [{"code": "initial-population"}]}, "count": 4},
+#                 {"code": {"coding": [{"code": "denominator"}]}, "count": 4},
+#                 {"code": {"coding": [{"code": "numerator"}]}, "count": 3}],
+#               "measureScore": {"value": 0.75}}]}
+#
+# WHAT ARRIVES -- the grid. DHIS2 analytics answers a grid, not objects: `headers` names the
+# columns and `rows` is a list of lists, so a value is read by finding its header's index.
+# That indirection is the one awkward thing about analytics and it is why the jq below looks
+# up `value` rather than indexing a fixed position.
+#
+#   {"headers": [{"name": "dx"}, {"name": "pe"}, {"name": "ou"}, {"name": "value"}],
+#    "rows": [["fbfJHSPpUQD", "202608", "ImspTQPwCqd", "0.71"]]}
+#
+# WHAT LEAVES. One discrepancy record, POSTed whether or not it found a gap, because "we
+# checked and they agree" is a fact worth delivering too:
+#
+#   {"measure": "...", "period": "202608", "org_unit": "ImspTQPwCqd",
+#    "fhir_score": 0.75, "dhis2_value": 0.71, "difference": 0.04, "discrepant": true}
+#
+# WHICH CODES LINE UP WITH WHAT. `measure_url` and `indicator` are the two halves of one claim
+# -- that this FHIR measure and this DHIS2 data element or indicator count the same thing --
+# and a reader changes both together or neither. `period` is a DHIS2 ISO period; the FHIR side
+# carries a date range, so the two are matched on the range the period covers.
+#
+# WHEN IT FINDS NOTHING. A missing report and an empty grid are ordinary answers, not failures:
+# the diff says `unavailable` and the receiver hears about it. A reconciliation that crashed
+# when one side was quiet would be silent exactly when something is wrong.
+#
+#   dg run --local examples/fhir/fhir-measure-report-to-analytics-check.yaml
+#   dg run --local examples/fhir/fhir-measure-report-to-analytics-check.yaml -p tolerance=0.1
+
+format: dirigent/v1
+kind: pipeline
+code: fhir-measure-report-to-analytics-check
+name: MeasureReport against DHIS2 analytics
+description: |
+  Hold a FHIR `MeasureReport` against the DHIS2 analytics value for the same period and org
+  unit, and deliver the gap.
+
+  A reconciliation, so it writes nothing: safe on a schedule. The report is produced by
+  scoring a CQL measure over FHIR data -- `d2w fhir serve` publishes no `Measure` or
+  `MeasureReport` of its own -- and read here from wherever it was published.
+
+tags: [fhir, dhis2, cross-boundary]
+
+requires:
+  blocks:
+    - http.request
+    - dhis2.analytics_query
+    - transform.jq
+    - webhook.post
+
+connections:
+  fhir-reports:
+    kind: http
+    config:
+      base_url: https://hapi.fhir.org/baseR4
+      timeout: 60s
+  dhis2-demo:
+    kind: dhis2
+    config:
+      base_url: https://play.im.dhis2.org/stable-2-43-1
+      basic_username: admin
+      basic_password: district
+      timeout: 60s
+  # Where a discrepancy is delivered. Postman Echo stands in for the receiver so the document
+  # runs; hmac_secret would let webhook.post sign the body, which is what a receiver that
+  # trusts nobody wants.
+  discrepancy-sink:
+    kind: http
+    config:
+      base_url: https://postman-echo.com
+      timeout: 30s
+
+params:
+  type: object
+  properties:
+    measure_url:
+      type: string
+      description: The measure whose report is read. Half of the claim that the two systems
+        count the same thing.
+      default: http://cms.gov/fhir/hqr/Measure/synthetic-test-measure
+    indicator:
+      type: string
+      description: The DHIS2 data element or indicator uid that is the other half of it.
+      default: fbfJHSPpUQD
+    org_unit:
+      type: string
+      default: ImspTQPwCqd
+    period:
+      type: string
+      description: A DHIS2 ISO period; the FHIR side is matched on the range it covers.
+      default: "202608"
+    tolerance:
+      type: number
+      description: How far apart the two may be before the difference is called a discrepancy.
+      default: 0.02
+
+steps:
+  # `measure` is the canonical of the measure, which is what makes a report findable without
+  # knowing its id. `_sort=-date` takes the most recent scoring when a measure was scored more
+  # than once for the same period.
+  read_report:
+    block: http.request
+    config:
+      connection: fhir-reports
+      path: /MeasureReport
+      method: GET
+      query:
+        measure: "${params.measure_url}"
+        _sort: "-date"
+        _count: 1
+      headers:
+        Accept: application/fhir+json
+      # A search that matched nothing is a 200 with an empty Bundle, so nothing special is
+      # needed here; this only says a 404 on the endpoint itself is still a failure.
+      success_status: [200]
+
+  # The same question, asked of DHIS2. An aggregate query takes its axes as `dimension`
+  # strings in DHIS2's own vocabulary: dx is the data, pe the period, ou the org unit.
+  read_analytics:
+    block: dhis2.analytics_query
+    config:
+      connection: dhis2-demo
+      mode: aggregate
+      dimension:
+        - "dx:${params.indicator}"
+        - "pe:${params.period}"
+      # A dimension the answer is not broken down BY, only filtered to. Putting ou here rather
+      # than in dimension is what makes the grid one row instead of one row per unit.
+      filter:
+        - "ou:${params.org_unit}"
+
+  # The subtraction. Both sides may be absent, and each absence is reported as itself rather
+  # than folded into a zero: a measure nobody scored and a coverage of 0% are different facts.
+  diff:
+    block: transform.jq
+    depends_on: [read_report, read_analytics]
+    config:
+      input:
+        reports: "${steps.read_report.output.json_body}"
+        grid: "${steps.read_analytics.output.json_body}"
+        measure: "${params.measure_url}"
+        period: "${params.period}"
+        org_unit: "${params.org_unit}"
+        tolerance: "${params.tolerance}"
+      program: |
+        . as {$reports, $grid, $measure, $period, $org_unit, $tolerance}
+        | (($reports.entry // [])[0].resource) as $report
+        | ($report.group[0].measureScore.value) as $score
+        # The grid's columns are named in headers, so the value column is found by name and
+        # never by position: DHIS2 adds columns, and a fixed index would start reading one.
+        | ([($grid.headers // []) | to_entries[] | select(.value.name == "value") | .key][0]) as $col
+        | (if $col == null then null
+           else [($grid.rows // [])[] | .[$col] | tonumber?][0] end) as $value
+        | {measure: $measure,
+           period: $period,
+           org_unit: $org_unit,
+           fhir_score: $score,
+           dhis2_value: $value,
+           populations: [(($report.group[0].population // [])[])
+                         | {code: .code.coding[0].code, count: .count}],
+           difference: (if $score == null or $value == null then null
+                        else (($score - $value) | fabs) end),
+           verdict: (if $score == null then "unavailable: no report was scored for this measure"
+                     elif $value == null then "unavailable: analytics answered no value"
+                     elif (($score - $value) | fabs) > $tolerance then "discrepant"
+                     else "agrees" end)}
+
+  # Delivered on every run. A receiver that only ever hears about disagreements cannot tell a
+  # healthy silence from a pipeline that stopped running.
+  report_discrepancy:
+    block: webhook.post
+    depends_on: [diff]
+    config:
+      connection: discrepancy-sink
+      path: /post
+      body: "${steps.diff.output.value}"
+      headers:
+        X-Dirigent-Check: fhir-measure-vs-dhis2-analytics

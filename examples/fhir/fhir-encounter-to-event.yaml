@@ -1,0 +1,248 @@
+# One clinical Encounter and its Observations collapsed into one DHIS2 program stage event.
+#
+# THE FLOW, END TO END. Find an Encounter on a general-purpose FHIR server, read every
+# Observation that names it, fold the two into a single `/api/tracker` event whose data values
+# are the observations, and post it with importMode=VALIDATE.
+#
+# WHY NOT THE FACADE. `d2w fhir serve` serves no Encounter and no Observation -- it publishes
+# DHIS2 as forms and captures, so its whole clinical surface is the capture pair, and asking
+# it for an Observation answers an OperationOutcome with code `not-supported`. Encounters come
+# from the other kind of FHIR server: a hospital's own, an OpenMRS, a HAPI. That is the point
+# of this example, so `fhir_base` defaults to the public HAPI R4 test server. It is a shared
+# sandbox anyone can write to, so the resources it holds change under you; every id below is a
+# parameter for that reason, and the searches are written to survive not finding one.
+#
+# THE MODELLING QUESTION THIS ANSWERS. FHIR splits a visit into one Encounter plus one
+# Observation per measurement. DHIS2 tracker puts the whole visit in one event: an event has
+# an occurredAt, an org unit, an enrollment, and a bag of dataValues. So the cardinalities do
+# not line up, and the translation is a FOLD -- many Observations into one event -- keyed on
+# Observation.encounter. Nothing else in this document is hard.
+#
+# WHAT ARRIVES. One Encounter:
+#
+#   {"resourceType": "Encounter", "id": "137202491", "status": "finished",
+#    "class": {"code": "AMB"}, "subject": {"reference": "Patient/137202428"},
+#    "period": {"start": "2026-07-20T09:00:00Z"}}
+#
+# and its Observations, each a code and a value:
+#
+#   {"resourceType": "Observation", "status": "final",
+#    "code": {"coding": [{"system": "http://loinc.org", "code": "29463-7",
+#                         "display": "Body weight"}]},
+#    "encounter": {"reference": "Encounter/137202491"},
+#    "valueQuantity": {"value": 61.5, "unit": "kg"}}
+#
+# WHAT LEAVES. One `/api/tracker` document holding one event:
+#
+#   {"events": [{"event": "EvAaBbCcDd1", "program": "IpHINAT79UW",
+#                "programStage": "A03MvHHogjR", "enrollment": "EnAaBbCcDd1",
+#                "trackedEntity": "coxwIkMqNBB", "orgUnit": "DiszpKrYNg8",
+#                "occurredAt": "2026-07-20", "status": "COMPLETED",
+#                "dataValues": [{"dataElement": "UXz7xuGCEhU", "value": "61.5"}]}]}
+#
+# WHICH CODE MAPS TO WHICH DATA ELEMENT.
+#
+#   Encounter.period.start (or Encounter.period.end) -> occurredAt
+#   Encounter.status "finished"                      -> event status COMPLETED
+#   Observation.code.coding LOINC code               -> dataElement, through `loinc_to_de`
+#   Observation.valueQuantity.value                  -> that data value's value
+#
+# WHERE A READER CHANGES IT. `loinc_to_de` is the mapping and the only place codes appear:
+# each entry is one LOINC code and the DHIS2 data element uid it lands in. The stage the event
+# belongs to is `program_stage`, and the program and enrollment are `program` and
+# `enrollment_uid`. An observation whose LOINC code is not in the table is dropped and counted
+# -- conceptmap-driven-mapping.yaml is the same mapping fetched from a server instead.
+#
+# WHAT THIS DOES NOT DO. It does not resolve the Encounter's Patient to a DHIS2 tracked entity.
+# That is a real lookup against a real identifier crosswalk, and patient-to-tracked-entity.yaml
+# is the half that does it; here the entity and its enrollment are parameters.
+#
+#   dg run --local examples/fhir/fhir-encounter-to-event.yaml
+#   dg run --local examples/fhir/fhir-encounter-to-event.yaml -p encounter_id=137202491
+
+format: dirigent/v1
+kind: pipeline
+code: fhir-encounter-to-event
+name: Encounter and Observations to one event
+description: |
+  Fold one FHIR `Encounter` and every `Observation` naming it into a single DHIS2 tracker
+  event, posted with `importMode=VALIDATE`.
+
+  The cardinalities do not line up: FHIR spreads a visit over an Encounter plus one
+  Observation per measurement, and a DHIS2 event holds the whole visit with a bag of data
+  values. The translation is a fold keyed on `Observation.encounter`.
+
+  Read against a general clinical FHIR server, because `d2w fhir serve` publishes DHIS2 as
+  forms and captures and serves no `Encounter` or `Observation` at all.
+
+tags: [fhir, dhis2, cross-boundary]
+
+requires:
+  blocks:
+    - http.request
+    - transform.jq
+
+connections:
+  # A public FHIR R4 sandbox, open and unauthenticated, standing in for a hospital's own
+  # server. Repoint it and only the two searches below have to survive the move.
+  fhir-clinical:
+    kind: http
+    config:
+      base_url: https://hapi.fhir.org/baseR4
+      timeout: 60s
+  dhis2-demo:
+    kind: dhis2
+    config:
+      base_url: https://play.im.dhis2.org/stable-2-43-1
+      basic_username: admin
+      basic_password: district
+      timeout: 60s
+
+params:
+  type: object
+  properties:
+    encounter_status:
+      type: string
+      description: Which encounters to consider. A visit that has not finished has not
+        produced a completed event.
+      default: finished
+    program:
+      type: string
+      default: IpHINAT79UW
+    program_stage:
+      type: string
+      description: The stage the visit lands in; one Questionnaire per stage on the facade.
+      default: A03MvHHogjR
+    org_unit:
+      type: string
+      default: DiszpKrYNg8
+    tracked_entity:
+      type: string
+      description: The DHIS2 person the Encounter's Patient resolves to. A real crosswalk is
+        patient-to-tracked-entity.yaml.
+      default: coxwIkMqNBB
+    enrollment_uid:
+      type: string
+      default: EnAaBbCcDd1
+    event_uid:
+      type: string
+      description: The event's own uid, minted by the client. Deriving it from the source
+        resource is what makes a rehearsal and an import name the same event, and a
+        re-forward collide (E1030) rather than duplicate.
+      default: EvAaBbCcDd1
+    loinc_to_de:
+      type: object
+      description: One LOINC code per DHIS2 data element uid. An observation coded outside
+        this table is dropped and counted.
+      default:
+        "29463-7": UXz7xuGCEhU
+        "8302-2": lw1SqmMlnfh
+        "8480-6": XorIxxprsOp
+
+steps:
+  # `_sort=-_lastUpdated` asks the busiest end of a shared sandbox for something that exists
+  # today. On a real server this is the visit selector: a patient, a date range, a location.
+  find_encounter:
+    block: http.request
+    config:
+      connection: fhir-clinical
+      path: /Encounter
+      method: GET
+      query:
+        status: "${params.encounter_status}"
+        _sort: "-_lastUpdated"
+        _count: 1
+      headers:
+        Accept: application/fhir+json
+
+  # `encounter` is a reference search parameter: it takes `Encounter/<id>`, and it is how the
+  # measurements of one visit are gathered without walking every Observation on the server.
+  # A server that also supports it would answer the same question in one call with
+  # `_revinclude=Observation:encounter` on the search above; two calls is the portable shape.
+  read_observations:
+    block: http.request
+    depends_on: [find_encounter]
+    config:
+      connection: fhir-clinical
+      path: /Observation
+      method: GET
+      query:
+        encounter: "Encounter/${steps.find_encounter.output.json_body.entry.0.resource.id}"
+        _count: 50
+      headers:
+        Accept: application/fhir+json
+
+  # The fold. One event out, however many observations came in, plus the codes that mapped to
+  # nothing so the receipt can say so.
+  fold_to_event:
+    block: transform.jq
+    depends_on: [find_encounter, read_observations]
+    config:
+      input:
+        encounters: "${steps.find_encounter.output.json_body}"
+        observations: "${steps.read_observations.output.json_body}"
+        codes: "${params.loinc_to_de}"
+        program: "${params.program}"
+        program_stage: "${params.program_stage}"
+        org_unit: "${params.org_unit}"
+        tracked_entity: "${params.tracked_entity}"
+        enrollment: "${params.enrollment_uid}"
+        event: "${params.event_uid}"
+      program: |
+        . as {$encounters, $observations, $codes, $program, $program_stage,
+              $org_unit, $tracked_entity, $enrollment, $event}
+        | (($encounters.entry // [])[0].resource) as $e
+        | if $e == null then error("no encounter matched; widen the search") else . end
+        # A date, not an instant: DHIS2 keeps an event's occurredAt as a zone-less wall clock,
+        # so the instant is cut at the T rather than reformatted.
+        | (($e.period.start // $e.period.end // "") | split("T") | first) as $occurred
+        | [($observations.entry // [])[].resource
+           | select(.status == "final" or .status == "amended")
+           | {code: ([(.code.coding // [])[]
+                      | select(.system == "http://loinc.org").code][0]),
+              value: (.valueQuantity.value // .valueInteger
+                      // .valueString // .valueCodeableConcept.coding[0].code)}
+           | select(.code != null and .value != null)] as $seen
+        | {document: {events: [{
+             event: $event,
+             program: $program,
+             programStage: $program_stage,
+             enrollment: $enrollment,
+             trackedEntity: $tracked_entity,
+             orgUnit: $org_unit,
+             occurredAt: $occurred,
+             status: (if $e.status == "finished" then "COMPLETED" else "ACTIVE" end),
+             dataValues: [$seen[] | select($codes[.code] != null)
+                          | {dataElement: $codes[.code], value: (.value | tostring)}]}]},
+           encounter: $e.id,
+           unmapped_codes: [$seen[] | select($codes[.code] == null).code] | unique}
+
+  rehearse_import:
+    block: http.request
+    depends_on: [fold_to_event]
+    config:
+      connection: dhis2-demo
+      path: /api/tracker
+      method: POST
+      query:
+        # /api/tracker's dry run. /api/dataValueSets spells the same intention dryRun=true.
+        importMode: VALIDATE
+      headers:
+        Content-Type: application/json
+      body: "${steps.fold_to_event.output.value.document}"
+      success_status: [200, 201, 409]
+
+  receipt:
+    block: transform.jq
+    depends_on: [rehearse_import]
+    config:
+      input:
+        report: "${steps.rehearse_import.output.json_body}"
+        folded: "${steps.fold_to_event.output.value}"
+      program: |
+        {encounter: .folded.encounter,
+         data_values: (.folded.document.events[0].dataValues | length),
+         unmapped_codes: .folded.unmapped_codes,
+         status: .report.status,
+         errors: [((.report.validationReport // .report.response.validationReport).errorReports // [])[]
+                  | {code: .errorCode, message: .message}]}

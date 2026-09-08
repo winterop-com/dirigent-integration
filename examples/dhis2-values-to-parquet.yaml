@@ -1,0 +1,51 @@
+# Export a DHIS2 data value set and re-encode it as parquet in object storage.
+#
+# Three packs meet in this one pipeline, which is why it lives here and in no pack: the read
+# is dhis2.data_value_set_export from the dhis2 pack, the re-encode is convert.arrow from the
+# parquet pack, and both ends address the s3:// scheme the dirigent-storage-s3 pack contributes.
+#
+# The export streams JSON to storage; convert.arrow reads that object and writes parquet beside
+# it. Parquet is bytes, never inline, so the codec always reads input_uri and writes save_to.
+# Which connection backs s3:// is an instance setting (storage_connections: {s3: <code>}).
+#
+#   dg run --local examples/dhis2-values-to-parquet.yaml
+
+format: dirigent/v1
+kind: pipeline
+code: dhis2-values-to-parquet
+name: Export a data value set as parquet
+description: Read a DHIS2 data value set to object storage, then re-encode it as parquet beside it.
+
+tags: [dhis2, parquet, s3, cross-boundary]
+
+requires:
+  blocks:
+    - dhis2.data_value_set_export
+    - convert.arrow
+
+connections:
+  dhis2-demo:
+    kind: dhis2
+    config:
+      base_url: https://play.im.dhis2.org/stable-2-43-1
+      basic_username: admin
+      basic_password: district
+      timeout: 60s
+
+steps:
+  export:
+    block: dhis2.data_value_set_export
+    config:
+      connection: dhis2-demo
+      data_set: BfMAe6Itzgt
+      period: "202507"
+      org_unit: vSbt6cezomG
+      save_to: s3://dirigent-exports/dhis2/BfMAe6Itzgt-202507.json
+  to_parquet:
+    block: convert.arrow
+    depends_on: [export]
+    config:
+      input_uri: ${steps.export.output.body_uri}
+      from: json
+      to: parquet
+      save_to: s3://dirigent-exports/dhis2/BfMAe6Itzgt-202507.parquet

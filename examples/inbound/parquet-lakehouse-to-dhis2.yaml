@@ -1,0 +1,146 @@
+# A lakehouse table aggregated down to what DHIS2 stores, then imported.
+#
+# The lakehouse and DHIS2 disagree about grain. A warehouse keeps one row per encounter,
+# typed and columnar, because analysis wants the detail; DHIS2's aggregate side keeps one
+# figure per data element, period and org unit, because that is what a report is. The whole
+# integration is that reduction, and it is one jq program.
+#
+# The hops, and the shape at each one:
+#
+#   1. decode     -> the parquet file as JSON text: rows of {org_unit, period, element,
+#                    count}, one per encounter, thousands of them
+#   2. aggregate  -> {dataValues: [...]}, one value per (element, period, org unit) triple,
+#                    counts summed -- tens of rows, not thousands
+#   3. import     -> the instance's summary
+#   4. signed_off -> a sensor, and the only step here that does not act: it waits for a
+#                    person to mark the data set complete for that month
+#
+# Parquet is bytes, so convert.arrow always reads input_uri; there is no inline form of a
+# columnar file. THE REDUCTION HAPPENS AFTER THE DECODE AND BEFORE ANYTHING ELSE, which is
+# what keeps the run's memory bounded by the number of distinct triples rather than by the
+# number of encounters. A table too large to decode inline is aggregated in the warehouse
+# and exported already reduced; this pipeline is unchanged by that.
+#
+# WHY THE LAST STEP IS A SENSOR. `dhis2.data_set_complete` observes a completeness
+# registration; it does not make one. Reading it here closes the loop honestly: the import
+# put the figures in, and the run then holds until somebody with the authority to say so
+# has signed the month off, or skips when nobody does inside the deadline. A pipeline that
+# registered completeness itself would be asserting, on a machine's authority, that a
+# month's reporting is finished.
+#
+# What makes it yours: the warehouse export's uri and its column names, and the data set
+# the month is signed off against. The s3:// scheme needs an s3 connection bound to it as
+# an instance setting (storage_connections: {s3: <code>}).
+#
+#   dg run --local examples/inbound/parquet-lakehouse-to-dhis2.yaml -p period=202606
+
+format: dirigent/v1
+kind: pipeline
+code: parquet-lakehouse-to-dhis2
+name: A lakehouse table into DHIS2
+description: |
+  Read a parquet export of encounter-grain rows, aggregate it to DHIS2's grain, import it,
+  and wait for the month to be signed off.
+
+tags: [inbound, dhis2, parquet, storage, transform, cross-boundary]
+
+requires:
+  blocks:
+    - convert.arrow
+    - transform.jq
+    - dhis2.data_value_set_import
+    - dhis2.data_set_complete
+  storage:
+    - s3
+
+connections:
+  dhis2-demo:
+    kind: dhis2
+    config:
+      base_url: https://play.im.dhis2.org/stable-2-43-1
+      basic_username: admin
+      basic_password: district
+      timeout: 60s
+
+params:
+  type: object
+  properties:
+    bucket:
+      type: string
+      description: The bucket the warehouse exports into.
+      default: dirigent-lakehouse
+    period:
+      type: string
+      description: The DHIS2 month this export covers, and the object it is named as.
+      default: "202606"
+    data_set:
+      type: string
+      description: The data set whose sign-off closes the month.
+      default: Rl58JxmKJo2
+    org_unit:
+      type: string
+      description: The org unit the sign-off is read for; the values carry their own.
+      default: DiszpKrYNg8
+    dry_run:
+      type: boolean
+      description: Whether the instance validates the import and writes nothing.
+      default: true
+
+steps:
+  decode:
+    block: convert.arrow
+    config:
+      input_uri: s3://${params.bucket}/encounters/${params.period}.parquet
+      from: parquet
+      to: json
+      # Parquet is compact and JSON is not, so the decoded text is several times the file.
+      # This is the number to raise when a month stops fitting, and the signal to aggregate
+      # upstream instead when raising it stops being reasonable.
+      max_input: 64mb
+
+  # The reduction. group_by needs its key sorted together, so the triple is built first and
+  # grouped on as a whole; the sum is over what each group holds. A count column that
+  # arrived as a string from the warehouse would sum as concatenation, hence tonumber.
+  aggregate:
+    block: transform.jq
+    depends_on: [decode]
+    config:
+      input: "${steps.decode.output.text}"
+      program: |
+        fromjson
+        | [.[] | {key: [.element, .period, .org_unit], count: (.count | tonumber)}]
+        | group_by(.key)
+        | {dataValues: [
+            .[]
+            | {dataElement: .[0].key[0],
+               period: .[0].key[1],
+               orgUnit: .[0].key[2],
+               value: ([.[].count] | add | tostring)}
+          ]}
+
+  import:
+    block: dhis2.data_value_set_import
+    depends_on: [aggregate]
+    config:
+      connection: dhis2-demo
+      data_values: "${steps.aggregate.output.value}"
+      dry_run: "${params.dry_run}"
+      # The warehouse is the source of truth for these figures, so a re-run of the same
+      # month must overwrite rather than refuse: an export corrected upstream is meant to
+      # land, and CREATE alone would leave the old figure standing.
+      import_strategy: CREATE_AND_UPDATE
+
+  # Each poke is one short read. on_timeout: skip is what makes the wait a report rather
+  # than a failure -- a month nobody has signed off by the deadline is a fact about the
+  # month, not a broken pipeline.
+  signed_off:
+    block: dhis2.data_set_complete
+    depends_on: [import]
+    poll: 15m
+    deadline: 72h
+    on_timeout: skip
+    config:
+      connection: dhis2-demo
+      data_set: "${params.data_set}"
+      period: "${params.period}"
+      org_unit: "${params.org_unit}"

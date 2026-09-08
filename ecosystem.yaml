@@ -1,0 +1,21 @@
+# The integration manifest: every component of the dirigent ecosystem and the ref it tracks.
+#
+# This is the source of truth for what the integration assembles. The runner reads it to know
+# which pack repositories to clone into checkouts/ and at which ref; the CI workflow reads
+# it the same way. dirigent itself is not cloned here -- its workspace packages are installed
+# as dependencies (see pyproject.toml) -- but it is listed so the manifest names the whole set.
+
+components:
+  dirigent:
+    repo: https://github.com/winterop-com/dirigent
+    ref: main
+    # The runtime monorepo. Installed as dependencies, never cloned, so the runner skips it.
+    role: runtime
+
+  dirigent-dhis2:
+    repo: https://github.com/winterop-com/dirigent-dhis2
+    ref: main
+    # The first out-of-repo official pack. Cloned so its own tests and examples run here.
+    role: pack
+
+  # Future official packs are listed here the same way, each cloned and self-tested.

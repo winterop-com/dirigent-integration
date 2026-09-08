@@ -1,0 +1,146 @@
+# One export per organisation unit, each landing as its own parquet object, with a manifest.
+#
+# The single-org-unit version of this is dhis2-values-to-parquet.yaml beside it. This is the
+# shape a real extraction has: a list of facilities or districts, one file each, and something
+# at the end that says what actually landed. It spans three packs -- dhis2 for the read,
+# parquet for the encoding, storage-s3 for both destinations -- so it belongs to none of them
+# and is authored here.
+#
+# What happens, hop by hop:
+#
+#   export      one dhis2.data_value_set_export per org unit, streaming JSON to
+#               s3://<bucket>/dhis2/<data set>/<period>/<org unit>.json. Nothing rides
+#               inline; the step's output per item is {body_uri, body_bytes, duration_ms}.
+#   to_parquet  one convert.arrow per org unit, reading that same JSON object back and
+#               writing .parquet beside it. Its output per item is
+#               {output_uri, output_bytes}, with text null because the result went to storage.
+#   manifest    one step, not one per org unit: it reads the whole fan-out back as a list and
+#               writes a small JSON document -- the period, the org units, and every parquet
+#               object with its size -- to s3. This is the artifact a downstream reader opens
+#               first to learn what a run produced without listing a bucket.
+#   archive     a second, dated copy of that manifest, so the history of what each run landed
+#               survives the next run overwriting the current one.
+#
+# To make it yours: change org_units, data_set and period, and point bucket at a bucket you
+# own. Which connection backs the s3:// scheme is an instance setting
+# (storage_connections: {s3: <code>}), so nothing about S3 appears in this document beyond
+# the URIs. The dhis2 connection below is the public play server, carried inline so the
+# document runs standalone; an instance you own names its own connection instead.
+#
+#   dg run --local examples/dhis2-values-per-org-unit-to-parquet.yaml
+#   dg run --local examples/dhis2-values-per-org-unit-to-parquet.yaml -p period=202506
+
+format: dirigent/v1
+kind: pipeline
+code: dhis2-values-per-org-unit-to-parquet
+name: A parquet file per org unit
+description: Export a data value set per organisation unit as parquet, and manifest what landed.
+
+tags: [dhis2, parquet, s3, cross-boundary]
+
+requires:
+  blocks:
+    - dhis2.data_value_set_export
+    - convert.arrow
+    - transform.jq
+    - storage.copy
+
+# The public DHIS2 play server, carried inline so this document runs on its own. A server
+# apply is where a connection is named rather than carried.
+connections:
+  dhis2-demo:
+    kind: dhis2
+    config:
+      base_url: https://play.im.dhis2.org/stable-2-43-1
+      basic_username: admin
+      basic_password: district
+      timeout: 60s
+
+params:
+  type: object
+  properties:
+    org_units:
+      type: array
+      # Facilities and districts that exist on the play server. The list is the fan-out's
+      # width: four elements here are four run items, four objects, four parquet files.
+      default: [vSbt6cezomG, DiszpKrYNg8, O6uvpzGd5pu, ImspTQPwCqd]
+      items:
+        type: string
+    data_set:
+      type: string
+      default: BfMAe6Itzgt
+    period:
+      type: string
+      default: "202507"
+      description: An ISO period identifier, such as 202507 or 2026Q1.
+    bucket:
+      type: string
+      default: dirigent-exports
+
+steps:
+  export:
+    block: dhis2.data_value_set_export
+    for_each: ${params.org_units}
+    # One org unit going quiet -- a facility the credential cannot read, an instance that
+    # times out on one subtree -- should not cost the other three their export. The run ends
+    # completed_with_errors and the failed item is simply absent downstream.
+    items: continue
+    config:
+      connection: dhis2-demo
+      data_set: ${params.data_set}
+      period: ${params.period}
+      org_unit: ${item}
+      # Streaming to storage rather than inline: a district's month is megabytes, and an
+      # inline body would be carried through every downstream reference.
+      save_to: s3://${params.bucket}/dhis2/${params.data_set}/${params.period}/${item}.json
+
+  to_parquet:
+    block: convert.arrow
+    depends_on: [export]
+    # The second fan-out reads the same parameter, not the step above it: for_each is expanded
+    # when the run is created, before any step has an output to read. That works because the
+    # destination the export wrote is computed from the same three values, so each item here
+    # addresses the object its twin above produced.
+    for_each: ${params.org_units}
+    items: continue
+    config:
+      # Parquet is bytes, so the codec always reads input_uri and writes save_to; there is no
+      # inline form of it to carry.
+      input_uri: s3://${params.bucket}/dhis2/${params.data_set}/${params.period}/${item}.json
+      from: json
+      to: parquet
+      save_to: s3://${params.bucket}/dhis2/${params.data_set}/${params.period}/${item}.parquet
+
+  manifest:
+    block: transform.jq
+    depends_on: [to_parquet]
+    config:
+      # A fan-out step's output is the list of its items' outputs, in item order, and only the
+      # items that succeeded are in it. Pairing it with the org unit list would therefore
+      # misalign after a failure, so the manifest counts and lists objects rather than
+      # claiming which org unit each one came from -- the URI already says that.
+      input:
+        period: ${params.period}
+        data_set: ${params.data_set}
+        asked_for: ${params.org_units}
+        encoded: ${steps.to_parquet.output}
+      program: |
+        {
+          data_set,
+          period,
+          asked_for: (.asked_for | length),
+          landed: (.encoded | length),
+          objects: [.encoded[] | {uri: .output_uri, bytes: .output_bytes}]
+        }
+      # transform.jq serialises its result as JSON when save_to is set, which is why no
+      # tojson is needed here and why the step's own `value` comes back null.
+      save_to: s3://${params.bucket}/dhis2/${params.data_set}/${params.period}/_manifest.json
+
+  archive:
+    block: storage.copy
+    depends_on: [manifest]
+    config:
+      source: ${steps.manifest.output.output_uri}
+      # Keyed by the run, so today's manifest does not overwrite yesterday's. The current
+      # manifest above stays at a stable URI for anything that just wants the latest.
+      target: s3://dirigent-archive/dhis2/${params.data_set}/${params.period}/${run.id}.json

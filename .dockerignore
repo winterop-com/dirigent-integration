@@ -1,0 +1,19 @@
+# The build context. The image is assembled from this repo's pyproject and uv.lock; the pack
+# checkouts and the local environment are working-tree state and never build input.
+
+.git
+.github
+.venv
+checkouts
+examples
+tests
+**/__pycache__
+**/*.egg-info
+**/.mypy_cache
+**/.pytest_cache
+**/.ruff_cache
+
+# A secret in the working tree is never build input.
+.env
+.env.*
+!.env.example

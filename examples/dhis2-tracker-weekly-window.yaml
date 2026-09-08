@@ -1,0 +1,151 @@
+# A weekly tracker extract that reads the week that just closed, not the moment it started.
+#
+# A schedule answers "when does this start". A window answers "what does this run cover", and
+# for an extract that is the only question that matters: the Monday-morning run is meant to
+# collect last week, not everything the instance has ever recorded. Every schedule-fired run
+# carries the interval that just closed as ${run.window.start} up to but not including
+# ${run.window.end}, and consecutive firings tile the timeline with no overlap and no gap.
+#
+# Four packs meet here: dhis2 for the tracker read, builtin for the jq and the ndjson codec,
+# parquet for the encoding, storage-s3 for both destinations.
+#
+# What happens, hop by hop:
+#
+#   read      dhis2.tracker, kind: events, scoped to a programme and an org unit subtree, with
+#             updated_after set to the window's start. DHIS2 answers a page: the objects under
+#             `instances` and a `page` block beside them.
+#   in_window the upper bound. DHIS2's tracker read takes updated_after and nothing that means
+#             updated_before, so the open end of the window is applied here instead. Without
+#             it, an event edited while the run was in flight would be collected twice: once by
+#             this firing and again by the next one.
+#   as_ndjson convert.std json -> ndjson to s3://. One event per line is the format a reader
+#             streams rather than parses whole, and it is what the parquet encoder reads next.
+#   as_parquet  convert.arrow ndjson -> parquet, beside it. Parquet is bytes, so the codec
+#             always reads input_uri and writes save_to; there is no inline form to carry.
+#   archive   a dated second copy, keyed by the window rather than by the clock, so a backfill
+#             of an old week writes that week's key and not today's.
+#
+# To make it yours: change program and org_unit to your own, adjust the cron and the timezone,
+# and point bucket at a bucket you own. Which connection backs s3:// is an instance setting
+# (storage_connections: {s3: <code>}).
+#
+# The window is a property of the run, not of this document -- nothing below declares it, the
+# cadence computes it -- so an ad hoc run has to be handed one, and a run carrying no window
+# refuses the reference rather than quietly asking DHIS2 for everything it has:
+#
+#   dg run --local examples/dhis2-tracker-weekly-window.yaml --window 2026-06-01..2026-06-08
+#   dg apply examples/dhis2-tracker-weekly-window.yaml
+#   dg backfill dhis2-tracker-weekly-window --schedule weekly \
+#       --from 2026-01-05T03:00:00Z --to 2026-03-02T03:00:00Z --dry-run
+
+format: dirigent/v1
+kind: pipeline
+code: dhis2-tracker-weekly-window
+name: A week of tracker events, as parquet
+description: Read the tracker events of the week that just closed and archive them as parquet.
+
+tags: [dhis2, parquet, s3, schedule, cross-boundary]
+
+requires:
+  blocks:
+    - dhis2.tracker
+    - transform.jq
+    - convert.std
+    - convert.arrow
+    - storage.copy
+
+# The public DHIS2 play server, carried inline so this document runs standalone. An instance
+# you own names a connection it holds instead.
+connections:
+  dhis2-demo:
+    kind: dhis2
+    config:
+      base_url: https://play.im.dhis2.org/stable-2-43-1
+      basic_username: admin
+      basic_password: district
+      timeout: 60s
+
+params:
+  type: object
+  properties:
+    program:
+      type: string
+      default: IpHINAT79UW
+      description: The tracker programme to read; the default is the play server's child programme.
+    org_unit:
+      type: string
+      default: ImspTQPwCqd
+    bucket:
+      type: string
+      default: dirigent-exports
+
+steps:
+  read:
+    block: dhis2.tracker
+    timeout: 30m
+    config:
+      connection: dhis2-demo
+      kind: events
+      program: ${params.program}
+      org_unit: ${params.org_unit}
+      # The org unit is a root, so the read has to descend it; SELECTED would return the
+      # events recorded at the root itself, which is almost none of them.
+      ou_mode: DESCENDANTS
+      # The lower bound of the window, handed to DHIS2 so the instance does the filtering
+      # rather than sending a year of events across for us to discard.
+      updated_after: ${run.window.start}
+      fields: event,program,programStage,orgUnit,occurredAt,updatedAt,status
+      page_size: 500
+
+  in_window:
+    block: transform.jq
+    depends_on: [read]
+    config:
+      input:
+        events: ${steps.read.output.json_body.instances}
+        until: ${run.window.end}
+      # Half-open: >= start came from DHIS2, < end is applied here. Both ends written out is
+      # what stops an event that was edited during the run being collected twice.
+      program: |
+        .until as $until
+        | [.events[] | select(.updatedAt < $until)]
+        | tojson
+
+  as_ndjson:
+    block: convert.std
+    depends_on: [in_window]
+    config:
+      input: ${steps.in_window.output.value}
+      from: json
+      to: ndjson
+      save_to: s3://${params.bucket}/dhis2/tracker/${params.program}/${run.window.start}.ndjson
+
+  as_parquet:
+    block: convert.arrow
+    depends_on: [as_ndjson]
+    config:
+      input_uri: ${steps.as_ndjson.output.output_uri}
+      from: ndjson
+      to: parquet
+      save_to: s3://${params.bucket}/dhis2/tracker/${params.program}/${run.window.start}.parquet
+
+  archive:
+    block: storage.copy
+    depends_on: [as_parquet]
+    config:
+      source: ${steps.as_parquet.output.output_uri}
+      # Keyed by the window's start, so re-running or backfilling a week overwrites that week's
+      # archive object and nothing else. Keying it by the wall clock would file a backfill of
+      # January under the day the backfill happened to run.
+      target: s3://dirigent-archive/dhis2/tracker/${params.program}/${run.window.start}.parquet
+
+triggers:
+  schedules:
+    - code: weekly
+      name: Monday morning, Oslo time
+      description: Reads the week that closed at three on Monday morning.
+      cron: "0 3 * * 1"
+      # The zone belongs to the schedule, so the window it derives is a week of Oslo's clock
+      # rather than a fixed 168 hours: the daylight-saving weeks come out right without
+      # anything in the steps above knowing that daylight saving exists.
+      timezone: Europe/Oslo

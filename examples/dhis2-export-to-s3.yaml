@@ -1,0 +1,51 @@
+# Export a DHIS2 data value set and archive it in object storage.
+#
+# This pipeline is the integration's own: it belongs to no single pack, because it spans two.
+# The read is a dhis2.data_value_set_export from the dhis2 pack; the archive is a storage.copy
+# onto the s3:// scheme the dirigent-storage-s3 pack contributes. dirigent-core knows neither
+# pack -- only an assembled environment where both are installed can run this at all.
+#
+# The export streams straight to s3:// rather than riding inline, and the copy then reads that
+# same object back and lays down a second, dated copy. Which connection backs the s3:// scheme
+# is an instance setting (storage_connections: {s3: <code>}), so the document carries only the
+# dhis2 connection it names directly.
+#
+#   dg run --local examples/dhis2-export-to-s3.yaml
+
+format: dirigent/v1
+kind: pipeline
+code: dhis2-export-to-s3
+name: Export a data value set to S3
+description: Read a DHIS2 data value set straight into object storage, then archive a dated copy.
+
+tags: [dhis2, s3, cross-boundary]
+
+requires:
+  blocks:
+    - dhis2.data_value_set_export
+    - storage.copy
+
+connections:
+  dhis2-demo:
+    kind: dhis2
+    config:
+      base_url: https://play.im.dhis2.org/stable-2-43-1
+      basic_username: admin
+      basic_password: district
+      timeout: 60s
+
+steps:
+  export:
+    block: dhis2.data_value_set_export
+    config:
+      connection: dhis2-demo
+      data_set: BfMAe6Itzgt
+      period: "202507"
+      org_unit: vSbt6cezomG
+      save_to: s3://dirigent-exports/dhis2/BfMAe6Itzgt-202507.json
+  archive:
+    block: storage.copy
+    depends_on: [export]
+    config:
+      source: ${steps.export.output.body_uri}
+      target: s3://dirigent-archive/dhis2/BfMAe6Itzgt-202507.json
