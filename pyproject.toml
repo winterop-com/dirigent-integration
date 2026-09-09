@@ -1,6 +1,6 @@
 [project]
 name = "dirigent-integration"
-version = "0.10.1"
+version = "0.10.2"
 description = "The control center for the dirigent plugin ecosystem: assemble every pack, run everyone's tests and examples together."
 readme = "README.md"
 requires-python = ">=3.13"
