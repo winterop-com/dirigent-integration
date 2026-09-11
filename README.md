@@ -51,6 +51,33 @@ One target, one green or red:
 A pack whose checkout is already present is reused. Other targets: `make sync`, `make clone`,
 `make lint`, `make clean`.
 
+## An instance to look at
+
+```sh
+make dev          # an empty instance on http://127.0.0.1:3333
+make dev-seeded   # the same instance with every corpus in it
+```
+
+`make dev-seeded` passes one `--seed` directory per component in `ecosystem.yaml`, in the order
+the manifest names them, and this repository's `examples/` last: dirigent's own corpus, then
+each pack's, then the cross-boundary ones. Schedules land paused, and a document the instance
+will not store is reported and passed over -- a corpus holds those on purpose, and a refusal is
+itself something to look at.
+
+The runtime is installed from git rather than cloned, so `make clone` also checks out
+`checkouts/dirigent` for its examples alone; `make test` neither needs nor makes that checkout.
+`DEV_HOST` and `DEV_PORT` move where both targets listen.
+
+`dev-seeded` mints a `DIRIGENT_SECRET_KEY` per boot, because a connection carrying a credential
+cannot be stored without one and the state is wiped first anyway, and it allows the unsafe
+blocks the corpora teach with (`UNSAFE_BLOCKS`). What stays refused is what no local instance
+holds: an object-store or warehouse connection nothing created, a schema a sibling document
+registers, a `docker.compose` step, a pipeline the corpus applies later.
+
+dirigent-server installed from git carries no UI bundle -- its `static/` is gitignored there and
+only `infra/Dockerfile` builds one -- so both targets serve the API and the root answers with a
+note saying so. The stack `make up` runs is the one that has the UI.
+
 ## The cross-boundary examples
 
 Pipelines that no single pack owns because they span several. Today they exercise the first

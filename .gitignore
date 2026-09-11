@@ -1,4 +1,5 @@
 checkouts/
+.dirigent/
 .venv/
 __pycache__/
 *.pyc
