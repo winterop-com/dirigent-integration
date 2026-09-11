@@ -57,12 +57,12 @@ Pipelines that no single pack owns because they span several. Today they exercis
 pack, DHIS2, across the built-in storage and transform packs; as more adapters land,
 cross-boundary pipelines across them are authored here the same way.
 
-- **`examples/dhis2-export-to-s3.yaml`** -- a `dhis2.data_value_set_export` streaming to the
-  `s3://` scheme, then a `storage.copy` archiving it.
-- **`examples/dhis2-values-to-parquet.yaml`** -- the same export feeding `convert.arrow`,
-  re-encoding to parquet in `s3://`: three packs in one pipeline.
+- **`examples/dhis2-export-to-s3.yaml`** -- a `dhis2.data_value_set_export` written to the
+  `s3://` scheme with `storage.write`, then a `storage.copy` archiving it.
+- **`examples/dhis2-values-to-parquet.yaml`** -- the same export staged in `s3://` and fed to
+  `convert.arrow`, re-encoding to parquet beside it: three packs in one pipeline.
 - **`examples/dhis2-values-per-org-unit-to-parquet.yaml`** -- that export fanned out over a list
-  of organisation units, one parquet object each, joined back into a manifest of what landed.
+  of organisation units, flattened into one parquet table, with a manifest of what landed.
 - **`examples/dhis2-analytics-to-csv-report.yaml`** -- a `dhis2.analytics_query` grid flattened
   into rows, written to `s3://` as csv, and announced with a `webhook.post` summary.
 - **`examples/parquet-to-dhis2-import.yaml`** -- the return leg: a parquet drop waited on with

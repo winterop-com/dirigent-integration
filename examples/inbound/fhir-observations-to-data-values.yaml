@@ -137,7 +137,7 @@ steps:
     depends_on: [pull]
     config:
       input:
-        bundle: "${steps.pull.output.json_body}"
+        bundle: "${steps.pull.output.body}"
         lookup: "${params.loinc_to_data_element}"
       program: |
         .lookup as $lookup

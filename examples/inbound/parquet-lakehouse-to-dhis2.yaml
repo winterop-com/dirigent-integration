@@ -7,19 +7,21 @@
 #
 # The hops, and the shape at each one:
 #
-#   1. decode     -> the parquet file as JSON text: rows of {org_unit, period, element,
-#                    count}, one per encounter, thousands of them
-#   2. aggregate  -> {dataValues: [...]}, one value per (element, period, org unit) triple,
+#   1. decode     -> the parquet file re-encoded as a json object in the run's scratch space:
+#                    rows of {org_unit, period, element, count}, one per encounter, thousands
+#                    of them
+#   2. rows       -> that object read into the run as a value, bounded by max_size
+#   3. aggregate  -> {dataValues: [...]}, one value per (element, period, org unit) triple,
 #                    counts summed -- tens of rows, not thousands
-#   3. import     -> the instance's summary
-#   4. signed_off -> a sensor, and the only step here that does not act: it waits for a
+#   4. import     -> the instance's summary
+#   5. signed_off -> a sensor, and the only step here that does not act: it waits for a
 #                    person to mark the data set complete for that month
 #
-# Parquet is bytes, so convert.arrow always reads input_uri; there is no inline form of a
-# columnar file. THE REDUCTION HAPPENS AFTER THE DECODE AND BEFORE ANYTHING ELSE, which is
-# what keeps the run's memory bounded by the number of distinct triples rather than by the
-# number of encounters. A table too large to decode inline is aggregated in the warehouse
-# and exported already reduced; this pipeline is unchanged by that.
+# Parquet is bytes and never travels as a value, so both ends of convert.arrow are URIs and
+# storage.read is what brings the decoded json in. THE REDUCTION HAPPENS AS SOON AS THE ROWS
+# ARE IN THE RUN, which is what keeps the run's memory bounded by the number of distinct
+# triples rather than by the number of encounters. A table too large to hold is aggregated in
+# the warehouse and exported already reduced; this pipeline is unchanged by that.
 #
 # WHY THE LAST STEP IS A SENSOR. `dhis2.data_set_complete` observes a completeness
 # registration; it does not make one. Reading it here closes the loop honestly: the import
@@ -47,6 +49,7 @@ tags: [inbound, dhis2, parquet, storage, transform, cross-boundary]
 requires:
   blocks:
     - convert.arrow
+    - storage.read
     - transform.jq
     - dhis2.data_value_set_import
     - dhis2.data_set_complete
@@ -90,25 +93,34 @@ steps:
   decode:
     block: convert.arrow
     config:
-      input_uri: s3://${params.bucket}/encounters/${params.period}.parquet
+      source: s3://${params.bucket}/encounters/${params.period}.parquet
       from: parquet
       to: json
-      # Parquet is compact and JSON is not, so the decoded text is several times the file.
+      # The run's own scratch space: the warehouse's object is left as it is, and these bytes
+      # exist only so the read below has json to decode.
+      target: ${run.scratch}/encounters-${params.period}.json
+
+  rows:
+    block: storage.read
+    depends_on: [decode]
+    config:
+      source: ${steps.decode.output.target}
+      # Parquet is compact and JSON is not, so the decoded object is several times the file.
       # This is the number to raise when a month stops fitting, and the signal to aggregate
-      # upstream instead when raising it stops being reasonable.
-      max_input: 64mb
+      # upstream instead when raising it stops being reasonable: an object past it is refused
+      # rather than truncated into a wrong one.
+      max_size: 64mb
 
   # The reduction. group_by needs its key sorted together, so the triple is built first and
   # grouped on as a whole; the sum is over what each group holds. A count column that
   # arrived as a string from the warehouse would sum as concatenation, hence tonumber.
   aggregate:
     block: transform.jq
-    depends_on: [decode]
+    depends_on: [rows]
     config:
-      input: "${steps.decode.output.text}"
+      input: "${steps.rows.output.value}"
       program: |
-        fromjson
-        | [.[] | {key: [.element, .period, .org_unit], count: (.count | tonumber)}]
+        [.[] | {key: [.element, .period, .org_unit], count: (.count | tonumber)}]
         | group_by(.key)
         | {dataValues: [
             .[]

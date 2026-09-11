@@ -112,9 +112,9 @@ params:
       default: http://dhis2.org/fhir
 
 steps:
-  # Inline rather than save_to: this set is one org unit for one month, and the next step is a
-  # jq program that wants the document as a value. A national export over a year is the case
-  # for streaming it to storage and handing on a body_uri instead.
+  # The export hands the set on as `body`, a value, and the next step is a jq program that
+  # wants exactly that. A national export over a year is the case for putting it down with a
+  # storage.write first and converting from there, so nothing holds it whole.
   export:
     block: dhis2.data_value_set_export
     config:
@@ -129,7 +129,7 @@ steps:
     depends_on: [export]
     config:
       input:
-        export: "${steps.export.output.json_body}"
+        export: "${steps.export.output.body}"
         base: "${params.identifier_base}"
         period: "${params.period}"
         org_unit: "${params.org_unit}"
@@ -202,7 +202,7 @@ steps:
     block: transform.jq
     depends_on: [publish]
     config:
-      input: "${steps.publish.output.json_body}"
+      input: "${steps.publish.output.body}"
       program: |
         {bundle: .type,
          entries: ((.entry // []) | length),

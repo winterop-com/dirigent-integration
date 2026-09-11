@@ -172,7 +172,7 @@ steps:
     block: validate.schema
     depends_on: [pull]
     config:
-      input: "${steps.pull.output.json_body.1}"
+      input: "${steps.pull.output.body.1}"
       schema: source-observations
 
   # Reads the GATE's output, not the pull's. Both hold the same bytes, and only one of them

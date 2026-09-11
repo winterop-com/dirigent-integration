@@ -1,14 +1,22 @@
 # Export a DHIS2 data value set and archive it in object storage.
 #
 # This pipeline is the integration's own: it belongs to no single pack, because it spans two.
-# The read is a dhis2.data_value_set_export from the dhis2 pack; the archive is a storage.copy
-# onto the s3:// scheme the dirigent-storage-s3 pack contributes. dirigent-core knows neither
+# The read is a dhis2.data_value_set_export from the dhis2 pack; the write and the archive land
+# on the s3:// scheme the dirigent-storage-s3 pack contributes. dirigent-core knows neither
 # pack -- only an assembled environment where both are installed can run this at all.
 #
-# The export streams straight to s3:// rather than riding inline, and the copy then reads that
-# same object back and lays down a second, dated copy. Which connection backs the s3:// scheme
-# is an instance setting (storage_connections: {s3: <code>}), so the document carries only the
-# dhis2 connection it names directly.
+# Three hops, and what each one hands on:
+#
+#   export   dhis2.data_value_set_export. The set comes back as `body`, a value in the run.
+#   stage    storage.write, that value to a URI. A block does not write storage itself: a
+#            value leaves a run through this one door. Output: uri, bytes_written,
+#            content_type.
+#   archive  storage.copy, the object the write named onto a second, dated key. A copy moves
+#            bytes nobody has to look at, so it is bounded by the storage and not by the
+#            worker.
+#
+# Which connection backs the s3:// scheme is an instance setting (storage_connections:
+# {s3: <code>}), so the document carries only the dhis2 connection it names directly.
 #
 #   dg run --local examples/dhis2-export-to-s3.yaml
 
@@ -16,13 +24,14 @@ format: dirigent/v1
 kind: pipeline
 code: dhis2-export-to-s3
 name: Export a data value set to S3
-description: Read a DHIS2 data value set straight into object storage, then archive a dated copy.
+description: Read a DHIS2 data value set, write it into object storage, then archive a dated copy.
 
 tags: [dhis2, s3, cross-boundary]
 
 requires:
   blocks:
     - dhis2.data_value_set_export
+    - storage.write
     - storage.copy
 
 connections:
@@ -42,10 +51,16 @@ steps:
       data_set: BfMAe6Itzgt
       period: "202507"
       org_unit: vSbt6cezomG
-      save_to: s3://dirigent-exports/dhis2/BfMAe6Itzgt-202507.json
-  archive:
-    block: storage.copy
+  stage:
+    block: storage.write
     depends_on: [export]
     config:
-      source: ${steps.export.output.body_uri}
+      target: s3://dirigent-exports/dhis2/BfMAe6Itzgt-202507.json
+      value: ${steps.export.output.body}
+  archive:
+    block: storage.copy
+    depends_on: [stage]
+    config:
+      # Where the write said the object landed, not the same key typed twice.
+      source: ${steps.stage.output.uri}
       target: s3://dirigent-archive/dhis2/BfMAe6Itzgt-202507.json

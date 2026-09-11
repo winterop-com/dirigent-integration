@@ -167,7 +167,7 @@ steps:
       path: /Observation
       method: GET
       query:
-        encounter: "Encounter/${steps.find_encounter.output.json_body.entry.0.resource.id}"
+        encounter: "Encounter/${steps.find_encounter.output.body.entry.0.resource.id}"
         _count: 50
       headers:
         Accept: application/fhir+json
@@ -179,8 +179,8 @@ steps:
     depends_on: [find_encounter, read_observations]
     config:
       input:
-        encounters: "${steps.find_encounter.output.json_body}"
-        observations: "${steps.read_observations.output.json_body}"
+        encounters: "${steps.find_encounter.output.body}"
+        observations: "${steps.read_observations.output.body}"
         codes: "${params.loinc_to_de}"
         program: "${params.program}"
         program_stage: "${params.program_stage}"
@@ -237,7 +237,7 @@ steps:
     depends_on: [rehearse_import]
     config:
       input:
-        report: "${steps.rehearse_import.output.json_body}"
+        report: "${steps.rehearse_import.output.body}"
         folded: "${steps.fold_to_event.output.value}"
       program: |
         {encounter: .folded.encounter,

@@ -156,7 +156,7 @@ steps:
     depends_on: [find_patient]
     config:
       input:
-        bundle: "${steps.find_patient.output.json_body}"
+        bundle: "${steps.find_patient.output.body}"
         program: "${params.program}"
         org_unit: "${params.org_unit}"
         enrollment: "${params.enrollment_uid}"
@@ -217,7 +217,7 @@ steps:
     block: transform.jq
     depends_on: [rehearse_import]
     config:
-      input: "${steps.rehearse_import.output.json_body}"
+      input: "${steps.rehearse_import.output.body}"
       program: |
         {status: .status,
          stats: (.stats // .response.stats),

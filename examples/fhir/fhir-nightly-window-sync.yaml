@@ -150,7 +150,7 @@ steps:
         to: "${run.window.end}"
       program: |
         . as {$pages, $asked, $from, $to}
-        | [$pages[] | .json_body
+        | [$pages[] | .body
            | {type: ((.entry // [])[0].resource.resourceType
                      // (.link[0].url | split("/") | last | split("?") | first)),
               # `total` is the server's count of the whole searchset, a different number from

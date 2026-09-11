@@ -4,8 +4,15 @@
 # is dhis2.data_value_set_export from the dhis2 pack, the re-encode is convert.arrow from the
 # parquet pack, and both ends address the s3:// scheme the dirigent-storage-s3 pack contributes.
 #
-# The export streams JSON to storage; convert.arrow reads that object and writes parquet beside
-# it. Parquet is bytes, never inline, so the codec always reads input_uri and writes save_to.
+# Three hops, and what each one hands on:
+#
+#   export      dhis2.data_value_set_export. The set comes back as `body`, a value in the run.
+#   stage       storage.write, that value as one JSON object. A converter reads a URI, so a
+#               value the run is holding is put down before it is re-encoded.
+#   to_parquet  convert.arrow, json to parquet. Parquet is bytes and never travels as a value:
+#               the step names a source URI and a target URI and carries nothing between them.
+#               Output: source, target, bytes_written.
+#
 # Which connection backs s3:// is an instance setting (storage_connections: {s3: <code>}).
 #
 #   dg run --local examples/dhis2-values-to-parquet.yaml
@@ -14,13 +21,14 @@ format: dirigent/v1
 kind: pipeline
 code: dhis2-values-to-parquet
 name: Export a data value set as parquet
-description: Read a DHIS2 data value set to object storage, then re-encode it as parquet beside it.
+description: Read a DHIS2 data value set into object storage, then re-encode it as parquet beside it.
 
 tags: [dhis2, parquet, s3, cross-boundary]
 
 requires:
   blocks:
     - dhis2.data_value_set_export
+    - storage.write
     - convert.arrow
 
 connections:
@@ -40,12 +48,17 @@ steps:
       data_set: BfMAe6Itzgt
       period: "202507"
       org_unit: vSbt6cezomG
-      save_to: s3://dirigent-exports/dhis2/BfMAe6Itzgt-202507.json
-  to_parquet:
-    block: convert.arrow
+  stage:
+    block: storage.write
     depends_on: [export]
     config:
-      input_uri: ${steps.export.output.body_uri}
+      target: s3://dirigent-exports/dhis2/BfMAe6Itzgt-202507.json
+      value: ${steps.export.output.body}
+  to_parquet:
+    block: convert.arrow
+    depends_on: [stage]
+    config:
+      source: ${steps.stage.output.uri}
       from: json
       to: parquet
-      save_to: s3://dirigent-exports/dhis2/BfMAe6Itzgt-202507.parquet
+      target: s3://dirigent-exports/dhis2/BfMAe6Itzgt-202507.parquet

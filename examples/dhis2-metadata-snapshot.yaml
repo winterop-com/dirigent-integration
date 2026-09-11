@@ -14,9 +14,10 @@
 #                the same document reads a 2.42 or a 2.43 instance unchanged. Each answer is
 #                the collection under its own key: {"dataElements": [...]}.
 #   snapshot     the fan-out read back as one list and zipped against the resource names into a
-#                single document, {"dataElements": [...], "organisationUnits": [...]}, written
-#                straight to s3. One object, one fetch, everything a reader needs to resolve a
-#                uid.
+#                single document, {"dataElements": [...], "organisationUnits": [...]}.
+#   store        storage.write, that document as one object in s3. A jq step hands on a value
+#                and a value leaves a run through this one door, so the write is its own hop.
+#                One object, one fetch, everything a reader needs to resolve a uid.
 #   counts       the same list, counted: what each collection held on the day of the snapshot.
 #                This is the number worth alerting on -- a data element count that halved
 #                overnight is a broken credential, not a tidy-up.
@@ -47,6 +48,7 @@ requires:
   blocks:
     - dhis2.metadata
     - transform.jq
+    - storage.write
     - pipeline.run
 
 # The public DHIS2 play server, carried inline so this document runs standalone. An instance
@@ -102,13 +104,17 @@ steps:
       # `items: continue` -- a tolerated failure would drop an element and silently shift
       # every collection one name to the left.
       program: |
-        [.resources, [.pages[].json_body]]
+        [.resources, [.pages[].body]]
         | transpose
         | map({(.[0]): (.[1][.[0]] // [])})
         | add
-      # transform.jq serialises its result as JSON when save_to is set, so nothing needs to
-      # call tojson; the step's own `value` comes back null because the result went to storage.
-      save_to: s3://${params.bucket}/dhis2/metadata/snapshot.json
+
+  store:
+    block: storage.write
+    depends_on: [snapshot]
+    config:
+      target: s3://${params.bucket}/dhis2/metadata/snapshot.json
+      value: ${steps.snapshot.output.value}
 
   counts:
     block: transform.jq
@@ -118,7 +124,7 @@ steps:
         resources: ${params.resources}
         pages: ${steps.collections.output}
       program: |
-        [.resources, [.pages[].json_body]]
+        [.resources, [.pages[].body]]
         | transpose
         | map({resource: .[0], rows: ((.[1][.[0]] // []) | length)})
 
@@ -126,7 +132,7 @@ steps:
     block: pipeline.run
     # Both branches, so the run does not start the export before the snapshot it is supposed to
     # be described by has actually landed.
-    depends_on: [snapshot, counts]
+    depends_on: [store, counts]
     config:
       pipeline: dhis2-export-to-s3
       # Waiting makes this run the whole story: one run id covers the metadata and the data,
