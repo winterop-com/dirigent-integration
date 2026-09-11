@@ -19,7 +19,7 @@ SEED_DIRS := $(patsubst %,--seed checkouts/%/examples,$(shell sed -n 's/^  \([a-
 #: that refuses them is missing a shelf.
 UNSAFE_BLOCKS ?= '["shell.run", "docker.run"]'
 
-.PHONY: test sync lock clone lint clean image up down dev dev-seeded
+.PHONY: ui test sync lock clone lint clean image up down dev dev-seeded
 
 # Assemble and run everything: clone the packs, run each pack's own tests and examples
 # against the assembled environment, validate the cross-boundary examples, and run the
@@ -43,17 +43,34 @@ clone: sync
 	$(UV) run python scripts/run_integration.py --clone-only
 
 # Boot an empty instance for manual testing, wiping the state a previous one left.
-dev: sync
-	$(UV) run dg dev --wipe-state --host $(DEV_HOST) --port $(DEV_PORT)
+dev: sync ui
+	DIRIGENT_UI_DIR=$(UI_DIST) $(UV) run dg dev --wipe-state --host $(DEV_HOST) --port $(DEV_PORT)
 
 # Boot an instance holding every component's example corpus, schedules paused. dirigent is
 # cloned for its examples alone -- no wheel carries them -- and the venv already holds every
 # pack, so the merged catalog accepts a document from any corpus. The secret key is minted per
 # boot: the state is wiped first, so no connection an older key sealed survives to be opened.
-dev-seeded: sync clone
+dev-seeded: sync clone ui
 	DIRIGENT_SECRET_KEY="$$($(UV) run python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')" \
 	  DIRIGENT_ENABLED_UNSAFE_BLOCKS=$(UNSAFE_BLOCKS) \
+	  DIRIGENT_UI_DIR=$(UI_DIST) \
 	  $(UV) run dg dev --wipe-state $(SEED_DIRS) --host $(DEV_HOST) --port $(DEV_PORT)
+
+#: Empty when bun is not installed, which is what lets `ui` skip loudly instead of failing.
+BUN := $(shell command -v bun 2>/dev/null)
+
+#: The bundle a checkout's `make ui` produces, which DIRIGENT_UI_DIR points the server at:
+#: dirigent-server installed from git carries none of its own.
+UI_DIST := checkouts/dirigent/packages/dirigent-server/frontend/dist
+
+# Build the web UI bundle in the cloned dirigent checkout, so `make dev` and `make dev-seeded`
+# serve it. Skipped with a note where there is no bun; the instance then answers the API alone.
+ui: clone
+	@if [ -z "$(BUN)" ]; then \
+		echo "=== SKIPPING the web UI bundle: bun is not on PATH; the instance serves the API alone."; \
+	else \
+		$(MAKE) -C checkouts/dirigent ui; \
+	fi
 
 # Lint and format-check the integration's own sources.
 lint:
