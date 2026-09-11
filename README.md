@@ -74,9 +74,10 @@ blocks the corpora teach with (`UNSAFE_BLOCKS`). What stays refused is what no l
 holds: an object-store or warehouse connection nothing created, a schema a sibling document
 registers, a `docker.compose` step, a pipeline the corpus applies later.
 
-dirigent-server installed from git carries no UI bundle -- its `static/` is gitignored there and
-only `infra/Dockerfile` builds one -- so both targets serve the API and the root answers with a
-note saying so. The stack `make up` runs is the one that has the UI.
+dirigent-server installed from git carries no UI bundle -- its `static/` is gitignored there --
+so both targets build one in the cloned checkout (`make ui`, which needs bun) and point the
+server at it with `DIRIGENT_UI_DIR`. Without bun the build is skipped with a note and the
+instance answers the API alone; the stack `make up` runs always has the UI.
 
 ## The cross-boundary examples
 
