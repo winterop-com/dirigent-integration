@@ -11,10 +11,6 @@ COMPOSE ?= docker compose --project-directory . -f infra/compose.yaml
 DEV_HOST ?= 127.0.0.1
 DEV_PORT ?= 3333
 
-#: One --seed per component in ecosystem.yaml, in the order the manifest names them, and this
-#: repository's own examples last: a pack added to the manifest is seeded with no edit here.
-SEED_DIRS := $(patsubst %,--seed checkouts/%/examples,$(shell sed -n 's/^  \([a-z0-9-]*\):$$/\1/p' ecosystem.yaml)) --seed examples
-
 #: The blocks the seeded instance allows, because the corpora teach with them and an instance
 #: that refuses them is missing a shelf.
 UNSAFE_BLOCKS ?= '["shell.run", "docker.run"]'
@@ -46,15 +42,16 @@ clone: sync
 dev: sync ui
 	DIRIGENT_UI_DIR=$(UI_DIST) $(UV) run dg dev --wipe-state --host $(DEV_HOST) --port $(DEV_PORT)
 
-# Boot an instance holding every component's example corpus, schedules paused. dirigent is
-# cloned for its examples alone -- no wheel carries them -- and the venv already holds every
-# pack, so the merged catalog accepts a document from any corpus. The secret key is minted per
-# boot: the state is wiped first, so no connection an older key sealed survives to be opened.
-dev-seeded: sync clone ui
+# Boot an instance holding every component's example corpus, schedules paused. Every corpus
+# is installed -- dirigent's own, each pack's, and this repository's -- and each ships through
+# the examples() hook, so --seed-installed reaches all of them with no path named here. The
+# secret key is minted per boot: the state is wiped first, so no connection an older key
+# sealed survives to be opened.
+dev-seeded: sync ui
 	DIRIGENT_SECRET_KEY="$$($(UV) run python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')" \
 	  DIRIGENT_ENABLED_UNSAFE_BLOCKS=$(UNSAFE_BLOCKS) \
 	  DIRIGENT_UI_DIR=$(UI_DIST) \
-	  $(UV) run dg dev --wipe-state $(SEED_DIRS) --host $(DEV_HOST) --port $(DEV_PORT)
+	  $(UV) run dg dev --wipe-state --seed-installed --host $(DEV_HOST) --port $(DEV_PORT)
 
 #: Empty when bun is not installed, which is what lets `ui` skip loudly instead of failing.
 BUN := $(shell command -v bun 2>/dev/null)
@@ -64,7 +61,8 @@ BUN := $(shell command -v bun 2>/dev/null)
 UI_DIST := checkouts/dirigent/packages/dirigent-server/frontend/dist
 
 # Build the web UI bundle in the cloned dirigent checkout, so `make dev` and `make dev-seeded`
-# serve it. Skipped with a note where there is no bun; the instance then answers the API alone.
+# serve it -- which is the only thing that checkout is for. Skipped with a note where there is
+# no bun; the instance then answers the API alone.
 ui: clone
 	@if [ -z "$(BUN)" ]; then \
 		echo "=== SKIPPING the web UI bundle: bun is not on PATH; the instance serves the API alone."; \

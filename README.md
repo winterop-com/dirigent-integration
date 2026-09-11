@@ -29,8 +29,11 @@ runnable at all.
   manifest names and has no per-pack knowledge.
 - **`infra/`** -- the batteries-included image and the stack that runs it: `Dockerfile` builds
   dirigent plus every pack plus the web UI, `compose.yaml` runs it against postgres.
-- **`examples/`** -- cross-boundary example pipelines, authored here because they span more
-  than one pack and belong to none.
+- **`src/dirigent_integration/shelves/`** -- cross-boundary example pipelines, authored here
+  because they span more than one pack and belong to none. They ship as package data: this
+  repository is itself a distribution registering one plugin whose `examples()` hook carries
+  the shelves, so an instance with it installed lists them with `dg examples list --plugin
+  integration`. The root `examples/` is a symlink to them, so a checkout's paths still read.
 - **`tests/`** -- the integration's own tests: the merged catalog is coherent, and the
   cross-boundary examples validate against it.
 
@@ -58,15 +61,18 @@ make dev          # an empty instance on http://127.0.0.1:3333
 make dev-seeded   # the same instance with every corpus in it
 ```
 
-`make dev-seeded` passes one `--seed` directory per component in `ecosystem.yaml`, in the order
-the manifest names them, and this repository's `examples/` last: dirigent's own corpus, then
-each pack's, then the cross-boundary ones. Schedules land paused, and a document the instance
-will not store is reported and passed over -- a corpus holds those on purpose, and a refusal is
-itself something to look at.
+`make dev-seeded` names no directory at all: every corpus is installed -- dirigent's own as
+`dirigent-examples`, each pack's inside the pack, and this repository's inside
+`dirigent_integration` -- and each ships through the `examples()` plugin hook, so
+`dg dev --seed-installed` reaches all of them. A pack added to `ecosystem.yaml` is seeded by
+being installed. Schedules land paused, and a document the instance will not store is reported
+and passed over -- a corpus holds those on purpose, and a refusal is itself something to look
+at.
 
 The runtime is installed from git rather than cloned, so `make clone` also checks out
-`checkouts/dirigent` for its examples alone; `make test` neither needs nor makes that checkout.
-`DEV_HOST` and `DEV_PORT` move where both targets listen.
+`checkouts/dirigent`, which exists for one thing: `make ui` builds the web bundle there.
+`make test` neither needs nor makes that checkout. `DEV_HOST` and `DEV_PORT` move where both
+targets listen.
 
 `dev-seeded` mints a `DIRIGENT_SECRET_KEY` per boot, because a connection carrying a credential
 cannot be stored without one and the state is wiped first anyway, and it allows the unsafe
@@ -181,9 +187,8 @@ cp .env.example .env      # set DIRIGENT_SECRET_KEY and DIRIGENT_BOOTSTRAP_ADMIN
 make up
 ```
 
-Four services -- postgres, a one-shot migration, the server and a worker -- with this
-repository's `examples/` mounted as the apply directory, so the cross-boundary pipelines are
-seeded at boot. The UI is on http://localhost:3333; `make down` removes it, volumes and all.
+Four services -- postgres, a one-shot migration, the server and a worker -- with the
+cross-boundary shelves mounted as the apply directory, so those pipelines are seeded at boot. The UI is on http://localhost:3333; `make down` removes it, volumes and all.
 
 ## CI
 

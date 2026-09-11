@@ -56,7 +56,10 @@ RUN apt-get update \
 
 WORKDIR /app
 
+# src/ comes along because this repository is itself a distribution: the plugin whose
+# examples() hook carries the cross-boundary shelves into the image.
 COPY pyproject.toml uv.lock README.md ./
+COPY src ./src
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=secret,id=github_token \
     if [ -s /run/secrets/github_token ]; then \

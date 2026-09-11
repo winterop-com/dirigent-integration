@@ -13,8 +13,8 @@ It reports one green or red. A pack repository whose checkout already exists is 
 ref's tip; one with local changes is left where it is, which is what lets a local, offline
 verification substitute a copy of a sibling working tree for a clone.
 
-`--clone-only` clones the runtime component as well, whose examples `make dev-seeded` seeds
-an instance from; no suite reads it, so a full run never clones it.
+`--clone-only` clones the runtime component as well, which is where `make ui` builds the web
+bundle from; no suite reads it, so a full run never clones it.
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "ecosystem.yaml"
 CHECKOUTS = ROOT / "checkouts"
-INTEGRATION_EXAMPLES = ROOT / "examples"
+INTEGRATION_EXAMPLES = ROOT / "src" / "dirigent_integration" / "shelves"
 INTEGRATION_TESTS = ROOT / "tests"
 
 
@@ -255,8 +255,8 @@ def main() -> int:
         clone(pack)
     if args.clone_only:
         # The runtime is installed from git, so a checkout of it is only ever wanted for the
-        # example corpus no wheel carries; `make dev-seeded` seeds from it, the suites never
-        # read it, and a run without --clone-only leaves it alone.
+        # web bundle `make ui` builds there; the suites never read it, and a run without
+        # --clone-only leaves it alone.
         for runtime in components("runtime"):
             clone(runtime)
         return 0

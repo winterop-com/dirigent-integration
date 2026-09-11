@@ -5,6 +5,7 @@
 .github
 .venv
 checkouts
+# The root examples/ is a symlink into src/, which is copied in whole.
 examples
 tests
 **/__pycache__
