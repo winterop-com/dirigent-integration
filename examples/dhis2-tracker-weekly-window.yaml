@@ -18,10 +18,14 @@
 #             updated_before, so the open end of the window is applied here instead. Without
 #             it, an event edited while the run was in flight would be collected twice: once by
 #             this firing and again by the next one.
-#   as_ndjson convert.std json -> ndjson to s3://. One event per line is the format a reader
+#   staged    storage.write, the windowed events as one json object in s3://. A converter reads
+#             one URI and writes another, so a value the run is holding is put down first --
+#             and that write is the only door a value leaves a run by.
+#   as_ndjson convert.std json -> ndjson, beside it. One event per line is the format a reader
 #             streams rather than parses whole, and it is what the parquet encoder reads next.
-#   as_parquet  convert.arrow ndjson -> parquet, beside it. Parquet is bytes, so the codec
-#             always reads input_uri and writes save_to; there is no inline form to carry.
+#   as_parquet  convert.arrow ndjson -> parquet, beside that. Parquet is bytes and never
+#             travels as a value: source and target are URIs and nothing is carried between
+#             them. Each converter's output names the target it wrote.
 #   archive   a dated second copy, keyed by the window rather than by the clock, so a backfill
 #             of an old week writes that week's key and not today's.
 #
@@ -50,6 +54,7 @@ requires:
   blocks:
     - dhis2.tracker
     - transform.jq
+    - storage.write
     - convert.std
     - convert.arrow
     - storage.copy
@@ -102,38 +107,44 @@ steps:
     depends_on: [read]
     config:
       input:
-        events: ${steps.read.output.json_body.instances}
+        events: ${steps.read.output.body.instances}
         until: ${run.window.end}
       # Half-open: >= start came from DHIS2, < end is applied here. Both ends written out is
       # what stops an event that was edited during the run being collected twice.
       program: |
         .until as $until
         | [.events[] | select(.updatedAt < $until)]
-        | tojson
+
+  staged:
+    block: storage.write
+    depends_on: [in_window]
+    config:
+      target: s3://${params.bucket}/dhis2/tracker/${params.program}/${run.window.start}.json
+      value: ${steps.in_window.output.value}
 
   as_ndjson:
     block: convert.std
-    depends_on: [in_window]
+    depends_on: [staged]
     config:
-      input: ${steps.in_window.output.value}
+      source: ${steps.staged.output.uri}
       from: json
       to: ndjson
-      save_to: s3://${params.bucket}/dhis2/tracker/${params.program}/${run.window.start}.ndjson
+      target: s3://${params.bucket}/dhis2/tracker/${params.program}/${run.window.start}.ndjson
 
   as_parquet:
     block: convert.arrow
     depends_on: [as_ndjson]
     config:
-      input_uri: ${steps.as_ndjson.output.output_uri}
+      source: ${steps.as_ndjson.output.target}
       from: ndjson
       to: parquet
-      save_to: s3://${params.bucket}/dhis2/tracker/${params.program}/${run.window.start}.parquet
+      target: s3://${params.bucket}/dhis2/tracker/${params.program}/${run.window.start}.parquet
 
   archive:
     block: storage.copy
     depends_on: [as_parquet]
     config:
-      source: ${steps.as_parquet.output.output_uri}
+      source: ${steps.as_parquet.output.target}
       # Keyed by the window's start, so re-running or backfilling a week overwrites that week's
       # archive object and nothing else. Keying it by the wall clock would file a backfill of
       # January under the day the backfill happened to run.

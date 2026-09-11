@@ -121,7 +121,7 @@ steps:
     depends_on: [pull]
     config:
       input:
-        observations: "${steps.pull.output.json_body}"
+        observations: "${steps.pull.output.body}"
         data_element: "${params.data_element}"
         org_unit: "${params.org_unit}"
       program: |

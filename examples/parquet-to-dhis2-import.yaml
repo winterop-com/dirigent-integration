@@ -11,12 +11,16 @@
 #   dropped   storage.exists is a sensor: each poke is one cheap head request, "not yet" is
 #             the expected answer, and the run parks rather than holding a worker. min_size
 #             is what stops it opening a half-written object a producer is still uploading.
-#   decode    convert.arrow parquet -> json, inline. The result is a JSON *string* holding an
-#             array of row objects, one per data value, because that is what a parquet table
-#             is: rows and columns, with no envelope around them.
-#   shape     that string is parsed and wrapped: DHIS2 wants {"dataValues": [...]}, the file
-#             carries the bare list. This is the whole impedance mismatch between a columnar
-#             file and a DHIS2 payload, and it is two lines of jq.
+#   decode    convert.arrow parquet -> json, into the run's scratch space. Parquet is bytes and
+#             never travels as a value, so both ends of a conversion are URIs: source and
+#             target. The json it writes is an array of row objects, one per data value,
+#             because that is what a parquet table is -- rows and columns, with no envelope.
+#   load      storage.read, that json object as a value. storage.read is the one door a value
+#             comes in by, and max_size is how much of it this step will hold: an object past
+#             it is refused rather than read half way.
+#   shape     the list is wrapped: DHIS2 wants {"dataValues": [...]}, the file carries the bare
+#             list. This is the whole impedance mismatch between a columnar file and a DHIS2
+#             payload, and it is one line of jq.
 #   gate      validate.schema against the carried schema below. Every dataElement and orgUnit
 #             must be a real DHIS2 uid and every period a real DHIS2 period, checked by the
 #             dhis2-uid and dhis2-period formats the dhis2 pack contributes -- so a typo is a
@@ -51,6 +55,7 @@ requires:
   blocks:
     - storage.exists
     - convert.arrow
+    - storage.read
     - transform.jq
     - validate.schema
     - dhis2.data_value_set_import
@@ -130,22 +135,31 @@ steps:
     block: convert.arrow
     depends_on: [dropped]
     config:
-      input_uri: ${params.drop_uri}
+      source: ${params.drop_uri}
       from: parquet
       to: json
-      # No save_to: the decoded text is handed on inline, because a data value set that fits a
-      # single import call also fits a step output.
-      max_input: 64mb
+      # The run's own scratch space: these bytes exist only so the read below has something to
+      # decode, and the object the producer dropped is left exactly as it was.
+      target: ${run.scratch}/data-values.json
+
+  load:
+    block: storage.read
+    depends_on: [decode]
+    config:
+      # Where the conversion said it wrote, not the same path typed twice.
+      source: ${steps.decode.output.target}
+      # A data value set that fits a single import call also fits a step output; a file bigger
+      # than this is refused here rather than truncated into a wrong one.
+      max_size: 64mb
 
   shape:
     block: transform.jq
-    depends_on: [decode]
+    depends_on: [load]
     config:
-      input: ${steps.decode.output.text}
-      # fromjson because the codec answers with text; the object literal is the envelope DHIS2
-      # requires and a parquet table has no room for.
+      input: ${steps.load.output.value}
+      # The object literal is the envelope DHIS2 requires and a parquet table has no room for.
       program: |
-        {dataValues: fromjson}
+        {dataValues: .}
 
   gate:
     block: validate.schema

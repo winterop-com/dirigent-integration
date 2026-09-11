@@ -140,12 +140,12 @@ steps:
         data_element: "${params.data_element}"
       program: |
         . as {$facility, $answers, $period, $data_element}
-        | [$answers[] | select(.json_body.args.facility == $facility.code)] as $mine
+        | [$answers[] | select(.body.args.facility == $facility.code)] as $mine
         | [$mine[]
            | {dataElement: $data_element,
               period: $period,
               orgUnit: $facility.org_unit,
-              value: (.json_body.args.reported | tostring)}]
+              value: (.body.args.reported | tostring)}]
 
   # The fan-in. A fanned step's output is a list of its items' output objects, so the value
   # each one carries is unwrapped once here before the lists are concatenated.
@@ -181,7 +181,7 @@ steps:
         summary: "${steps.import.output}"
         period: "${params.period}"
       program: |
-        [.answered[] | .json_body.args.facility] as $codes
+        [.answered[] | .body.args.facility] as $codes
         | {period: .period,
            facilities_asked: (.asked | length),
            facilities_answered: ($codes | length),

@@ -170,7 +170,7 @@ steps:
     block: transform.jq
     depends_on: [read_captures]
     config:
-      input: "${steps.read_captures.output.json_body}"
+      input: "${steps.read_captures.output.body}"
       program: |
         [.entry[]?.resource | select(.status == "completed")]
         | .[0] as $r

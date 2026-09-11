@@ -136,7 +136,7 @@ steps:
     depends_on: [fetch_map]
     config:
       input:
-        map: "${steps.fetch_map.output.json_body}"
+        map: "${steps.fetch_map.output.body}"
         target_system: "${params.target_system}"
       program: |
         . as {$map, $target_system}

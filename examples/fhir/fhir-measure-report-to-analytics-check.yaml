@@ -163,8 +163,8 @@ steps:
     depends_on: [read_report, read_analytics]
     config:
       input:
-        reports: "${steps.read_report.output.json_body}"
-        grid: "${steps.read_analytics.output.json_body}"
+        reports: "${steps.read_report.output.body}"
+        grid: "${steps.read_analytics.output.body}"
         measure: "${params.measure_url}"
         period: "${params.period}"
         org_unit: "${params.org_unit}"

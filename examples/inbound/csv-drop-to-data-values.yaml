@@ -8,12 +8,15 @@
 #
 #   1. arrived  -> a sensor, not a read: it answers only once an object matching the glob is
 #                  there and at least min_size, and hands on that object's uri
-#   2. decode   -> the csv as JSON *text*: a codec answers text, always
-#   3. rows     -> that text parsed, each row carrying the data element uid the lookup gave
-#                  it, so the code-to-uid translation is done once and visibly
-#   4. values   -> one data value per row, DHIS2's four fields and nothing else
-#   5. kept     -> the same list minus the rows that carry no measurement
-#   6. import   -> the instance's summary
+#   2. decode   -> the csv re-encoded as a json object in the run's scratch space: a
+#                  conversion reads a URI and writes a URI, and carries nothing between them
+#   3. table    -> that object read into the run as a value, which is the one door a value
+#                  comes in by
+#   4. rows     -> the table with each row carrying the data element uid the lookup gave it,
+#                  so the code-to-uid translation is done once and visibly
+#   5. values   -> one data value per row, DHIS2's four fields and nothing else
+#   6. kept     -> the same list minus the rows that carry no measurement
+#   7. import   -> the instance's summary
 #
 # The lookup is the part every deployment rewrites. It sits in its own value.const step
 # because that is where a reader looks for it: the sending system's column codes on the
@@ -45,6 +48,7 @@ requires:
   blocks:
     - storage.exists
     - convert.std
+    - storage.read
     - value.const
     - transform.jq
     - map.jq
@@ -92,16 +96,25 @@ steps:
       uri: s3://${params.bucket}/drops/${params.day}/*.csv
       min_size: 1b
 
-  # input_uri rather than input: the object stays in storage and only the decoded text
-  # rides on, so nothing about this step changes when the drop grows to a hundred thousand
-  # rows.
+  # The drop the sender wrote is left exactly as it is: the conversion reads it and writes
+  # the json beside it in the run's own scratch space.
   decode:
     block: convert.std
     depends_on: [arrived]
     config:
-      input_uri: "${steps.arrived.output.uri}"
+      source: "${steps.arrived.output.uri}"
       from: csv
       to: json
+      target: "${run.scratch}/drop-${params.day}.json"
+
+  # The read is where the drop enters the run, and max_size is the ceiling on what one drop
+  # may be: an object past it is refused rather than half read.
+  table:
+    block: storage.read
+    depends_on: [decode]
+    config:
+      source: "${steps.decode.output.target}"
+      max_size: 16mb
 
   # The sending system's vocabulary, translated. One place, one step, one thing to hand a
   # DHIS2 administrator when a new indicator is added.
@@ -112,19 +125,18 @@ steps:
         PMTCT_EXPOSED_REGISTERED: x0PshcPLSk1
         PMTCT_NVP_72H: wZqi8EXN5x4
 
-  # A codec answers text, so the program starts with fromjson. The uid is attached here,
-  # while the whole table is in scope; the per-row verbs below cannot see it, because a map
-  # program sees one element and nothing else.
+  # The uid is attached here, while the whole table is in scope; the per-row verbs below
+  # cannot see the lookup, because a map program sees one element and nothing else.
   rows:
     block: transform.jq
-    depends_on: [decode, lookup]
+    depends_on: [table, lookup]
     config:
       input:
-        csv: "${steps.decode.output.text}"
+        csv: "${steps.table.output.value}"
         lookup: "${steps.lookup.output.value}"
       program: |
         .lookup as $lookup
-        | (.csv | fromjson)
+        | .csv
         | [.[] | . + {dataElement: $lookup[.element_code]}]
 
   # Exactly one data value per row, and the list is as long as the one above it -- which is

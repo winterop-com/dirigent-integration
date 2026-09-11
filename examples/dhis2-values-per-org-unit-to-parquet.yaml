@@ -1,24 +1,41 @@
-# One export per organisation unit, each landing as its own parquet object, with a manifest.
+# One export per organisation unit, flattened into one parquet table, with a manifest.
 #
 # The single-org-unit version of this is dhis2-values-to-parquet.yaml beside it. This is the
-# shape a real extraction has: a list of facilities or districts, one file each, and something
-# at the end that says what actually landed. It spans three packs -- dhis2 for the read,
-# parquet for the encoding, storage-s3 for both destinations -- so it belongs to none of them
-# and is authored here.
+# shape a real extraction has: a list of facilities or districts, one read each, one table at
+# the end, and something that says what actually landed. It spans three packs -- dhis2 for the
+# reads, parquet for the encoding, storage-s3 for both destinations -- so it belongs to none of
+# them and is authored here.
+#
+# WHY ONE TABLE AND NOT ONE FILE PER ORG UNIT. A value moves through step outputs, and a value
+# leaves a run through storage.write; a block does not write storage itself. A fan-out step
+# stores one output -- the list of its items' outputs, in item order, with a failed item absent
+# from it -- and `for_each` is expanded when the run is created, so it can read params, run and
+# item and never an upstream step's output. Item three of one step therefore cannot ask item
+# three of another what it produced: a second fan cannot pick up the export its twin made. So
+# the fan-in is a single step over every export, and the org unit is read out of each data
+# value where the join key can be seen, rather than out of a storage path that used to carry it.
 #
 # What happens, hop by hop:
 #
-#   export      one dhis2.data_value_set_export per org unit, streaming JSON to
-#               s3://<bucket>/dhis2/<data set>/<period>/<org unit>.json. Nothing rides
-#               inline; the step's output per item is {body_uri, body_bytes, duration_ms}.
-#   to_parquet  one convert.arrow per org unit, reading that same JSON object back and
-#               writing .parquet beside it. Its output per item is
-#               {output_uri, output_bytes}, with text null because the result went to storage.
-#   manifest    one step, not one per org unit: it reads the whole fan-out back as a list and
-#               writes a small JSON document -- the period, the org units, and every parquet
-#               object with its size -- to s3. This is the artifact a downstream reader opens
-#               first to learn what a run produced without listing a bucket.
-#   archive     a second, dated copy of that manifest, so the history of what each run landed
+#   export      one dhis2.data_value_set_export per org unit. Each item answers `body`, the
+#               data value set as a value. items: continue means one facility going quiet --
+#               a credential that cannot read it, an instance that times out on one subtree --
+#               does not cost the others their export; the run ends completed_with_errors and
+#               the failed item is simply absent from this step's output list.
+#   rows        the fan-in: every set this step is handed, opened at .dataValues and flattened
+#               into one table sorted by org unit and data element.
+#   staged      storage.write, that table as one json object. A converter reads one URI and
+#               writes another, so a value the run is holding is put down before it is
+#               re-encoded. Output: uri, bytes_written, content_type.
+#   parquet     convert.arrow, json to parquet. Parquet is bytes and never travels as a value:
+#               the step names a source URI and a target URI and carries nothing between them.
+#               Output: source, target, bytes_written.
+#   manifest    what the run has to say for itself: how many org units were asked for, how many
+#               answered, how many rows landed, and where the file is.
+#   index       that manifest written beside the parquet, at a stable URI. This is the artifact
+#               a downstream reader opens first to learn what a run produced without listing a
+#               bucket.
+#   archive     a second, dated copy of the manifest, so the history of what each run landed
 #               survives the next run overwriting the current one.
 #
 # To make it yours: change org_units, data_set and period, and point bucket at a bucket you
@@ -33,16 +50,17 @@
 format: dirigent/v1
 kind: pipeline
 code: dhis2-values-per-org-unit-to-parquet
-name: A parquet file per org unit
-description: Export a data value set per organisation unit as parquet, and manifest what landed.
+name: A parquet table over a batch of org units
+description: Export a data value set per organisation unit, flatten the batch into one parquet table, and manifest what landed.
 
 tags: [dhis2, parquet, s3, cross-boundary]
 
 requires:
   blocks:
     - dhis2.data_value_set_export
-    - convert.arrow
     - transform.jq
+    - storage.write
+    - convert.arrow
     - storage.copy
 
 # The public DHIS2 play server, carried inline so this document runs on its own. A server
@@ -62,7 +80,7 @@ params:
     org_units:
       type: array
       # Facilities and districts that exist on the play server. The list is the fan-out's
-      # width: four elements here are four run items, four objects, four parquet files.
+      # width: four elements here are four run items and four reads.
       default: [vSbt6cezomG, DiszpKrYNg8, O6uvpzGd5pu, ImspTQPwCqd]
       items:
         type: string
@@ -81,66 +99,88 @@ steps:
   export:
     block: dhis2.data_value_set_export
     for_each: ${params.org_units}
-    # One org unit going quiet -- a facility the credential cannot read, an instance that
-    # times out on one subtree -- should not cost the other three their export. The run ends
-    # completed_with_errors and the failed item is simply absent downstream.
     items: continue
     config:
       connection: dhis2-demo
       data_set: ${params.data_set}
       period: ${params.period}
       org_unit: ${item}
-      # Streaming to storage rather than inline: a district's month is megabytes, and an
-      # inline body would be carried through every downstream reference.
-      save_to: s3://${params.bucket}/dhis2/${params.data_set}/${params.period}/${item}.json
 
-  to_parquet:
-    block: convert.arrow
+  rows:
+    block: transform.jq
     depends_on: [export]
-    # The second fan-out reads the same parameter, not the step above it: for_each is expanded
-    # when the run is created, before any step has an output to read. That works because the
-    # destination the export wrote is computed from the same three values, so each item here
-    # addresses the object its twin above produced.
-    for_each: ${params.org_units}
-    items: continue
     config:
-      # Parquet is bytes, so the codec always reads input_uri and writes save_to; there is no
-      # inline form of it to carry.
-      input_uri: s3://${params.bucket}/dhis2/${params.data_set}/${params.period}/${item}.json
+      # One fan-out step, one output: the list of what its items answered. An org unit whose
+      # item failed is simply not in it, and an org unit with nothing reported answers a set
+      # with no dataValues, which is why the flattening tolerates both.
+      input: ${steps.export.output}
+      program: |
+        [.[]
+         | .body
+         | (.dataValues // [])[]
+         | {org_unit: .orgUnit,
+            data_element: .dataElement,
+            category_option_combo: .categoryOptionCombo,
+            period: .period,
+            value: .value,
+            stored_by: .storedBy,
+            last_updated: .lastUpdated}]
+        | sort_by(.org_unit, .data_element, .category_option_combo)
+
+  staged:
+    block: storage.write
+    depends_on: [rows]
+    config:
+      target: s3://${params.bucket}/dhis2/${params.data_set}/${params.period}/values.json
+      value: ${steps.rows.output.value}
+
+  parquet:
+    block: convert.arrow
+    depends_on: [staged]
+    config:
+      source: ${steps.staged.output.uri}
       from: json
       to: parquet
-      save_to: s3://${params.bucket}/dhis2/${params.data_set}/${params.period}/${item}.parquet
+      target: s3://${params.bucket}/dhis2/${params.data_set}/${params.period}/values.parquet
 
   manifest:
     block: transform.jq
-    depends_on: [to_parquet]
+    depends_on: [export, rows, parquet]
     config:
-      # A fan-out step's output is the list of its items' outputs, in item order, and only the
-      # items that succeeded are in it. Pairing it with the org unit list would therefore
-      # misalign after a failure, so the manifest counts and lists objects rather than
-      # claiming which org unit each one came from -- the URI already says that.
+      # `answered` is shorter than `asked_for` exactly when an item failed, which is the only
+      # place in the run where that difference is visible as data rather than as a status.
       input:
-        period: ${params.period}
         data_set: ${params.data_set}
+        period: ${params.period}
         asked_for: ${params.org_units}
-        encoded: ${steps.to_parquet.output}
+        answered: ${steps.export.output}
+        rows: ${steps.rows.output.value}
+        file: ${steps.parquet.output.target}
+        bytes: ${steps.parquet.output.bytes_written}
       program: |
         {
           data_set,
           period,
+          file,
+          bytes,
           asked_for: (.asked_for | length),
-          landed: (.encoded | length),
-          objects: [.encoded[] | {uri: .output_uri, bytes: .output_bytes}]
+          answered: (.answered | length),
+          rows: (.rows | length),
+          org_units: ([.rows[].org_unit] | unique)
         }
-      # transform.jq serialises its result as JSON when save_to is set, which is why no
-      # tojson is needed here and why the step's own `value` comes back null.
-      save_to: s3://${params.bucket}/dhis2/${params.data_set}/${params.period}/_manifest.json
+
+  index:
+    block: storage.write
+    depends_on: [manifest]
+    config:
+      target: s3://${params.bucket}/dhis2/${params.data_set}/${params.period}/_manifest.json
+      value: ${steps.manifest.output.value}
 
   archive:
     block: storage.copy
-    depends_on: [manifest]
+    depends_on: [index]
     config:
-      source: ${steps.manifest.output.output_uri}
+      source: ${steps.index.output.uri}
       # Keyed by the run, so today's manifest does not overwrite yesterday's. The current
       # manifest above stays at a stable URI for anything that just wants the latest.
       target: s3://dirigent-archive/dhis2/${params.data_set}/${params.period}/${run.id}.json

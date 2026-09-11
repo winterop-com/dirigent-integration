@@ -10,12 +10,15 @@
 # What happens, hop by hop:
 #
 #   query     dhis2.analytics_query, aggregate mode, broken down by indicator and period with
-#             the org unit fixed as a filter. The grid comes back inline in json_body.
+#             the org unit fixed as a filter. The grid comes back as `body`, a value.
 #   rows      the grid becomes a list of flat objects, one per grid row, with the uids
 #             resolved to names out of metaData: {indicator, period, value}. That is the
 #             shape a csv has, and the grid is not.
-#   as_text   tojson, because a codec takes text and a jq step hands on a value.
-#   report    convert.std json -> csv, straight to s3://. The header line is the object keys.
+#   staged    storage.write, that value as one json object. A converter reads one URI and
+#             writes another, so a value the run is holding is put down before it is
+#             re-encoded -- and that write is the only door a value leaves a run by.
+#   report    convert.std json -> csv, reading the staged object and writing to s3://. The
+#             header line is the object keys. Output: source, target, bytes_written.
 #   summary   how many rows and where they went, built before the notification so the webhook
 #             body is a value and not four references.
 #   notify    webhook.post of that summary to whatever URL the caller named. Nothing is signed
@@ -43,6 +46,7 @@ requires:
   blocks:
     - dhis2.analytics_query
     - transform.jq
+    - storage.write
     - convert.std
     - webhook.post
 
@@ -103,7 +107,7 @@ steps:
     block: transform.jq
     depends_on: [query]
     config:
-      input: ${steps.query.output.json_body}
+      input: ${steps.query.output.body}
       # The grid is positional, so the column positions are looked up by header name rather
       # than hard-coded: DHIS2 has moved them between versions. metaData.items maps every uid
       # in the answer to its display name, which is what turns dx:Uvn6LCg7dVU into a label.
@@ -121,24 +125,25 @@ steps:
             }
           ]
 
-  as_text:
-    block: transform.jq
+  staged:
+    block: storage.write
     depends_on: [rows]
     config:
-      input: ${steps.rows.output.value}
-      # A codec takes text; a jq step hands on a value. tojson is the join between them.
-      program: tojson
+      # The run's own scratch space: these bytes exist only so the converter has a URI to
+      # read, and the report the caller keeps is the csv below.
+      target: ${run.scratch}/analytics/${params.period}.json
+      value: ${steps.rows.output.value}
 
   report:
     block: convert.std
-    depends_on: [as_text]
+    depends_on: [staged]
     config:
-      input: ${steps.as_text.output.value}
+      source: ${steps.staged.output.uri}
       from: json
       to: csv
       # The object outlives the run, which is the whole point of writing to s3:// rather than
       # ${run.scratch}: a person fetches this after the run is long finished.
-      save_to: s3://${params.bucket}/dhis2/analytics/${params.period}.csv
+      target: s3://${params.bucket}/dhis2/analytics/${params.period}.csv
 
   summary:
     block: transform.jq
@@ -146,8 +151,8 @@ steps:
     config:
       input:
         rows: ${steps.rows.output.value}
-        csv: ${steps.report.output.output_uri}
-        bytes: ${steps.report.output.output_bytes}
+        csv: ${steps.report.output.target}
+        bytes: ${steps.report.output.bytes_written}
       # Counting happens here rather than in the notification because a webhook body should be
       # a value that was computed, not four references a receiver has to trust were resolved.
       program: |
