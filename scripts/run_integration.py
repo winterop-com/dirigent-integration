@@ -12,6 +12,9 @@ installed together, it:
 It reports one green or red. A pack repository whose checkout already exists is moved to its
 ref's tip; one with local changes is left where it is, which is what lets a local, offline
 verification substitute a copy of a sibling working tree for a clone.
+
+`--clone-only` clones the runtime component as well, whose examples `make dev-seeded` seeds
+an instance from; no suite reads it, so a full run never clones it.
 """
 
 from __future__ import annotations
@@ -35,8 +38,8 @@ INTEGRATION_EXAMPLES = ROOT / "examples"
 INTEGRATION_TESTS = ROOT / "tests"
 
 
-class Pack:
-    """One cloned pack: where its repository lives and what it contributes to run here."""
+class Component:
+    """One cloned component: where its repository lives and what it contributes to run here."""
 
     def __init__(self, name: str, repo: str, ref: str) -> None:
         """Bind a pack's name to its repository, its tracked ref, and its checkout path."""
@@ -56,17 +59,22 @@ class Pack:
         return self.path / "examples"
 
 
-def packs() -> list[Pack]:
-    """Read the manifest and return the components that are cloned and self-tested here."""
+def components(role: str) -> list[Component]:
+    """Read the manifest and return the components in one role, in the order it names them."""
     manifest = yaml.safe_load(MANIFEST.read_text())
-    found: list[Pack] = []
-    for name, entry in manifest["components"].items():
-        if entry.get("role") == "pack":
-            found.append(Pack(name, entry["repo"], entry["ref"]))
-    return found
+    return [
+        Component(name, entry["repo"], entry["ref"])
+        for name, entry in manifest["components"].items()
+        if entry.get("role") == role
+    ]
 
 
-def clone(pack: Pack) -> None:
+def packs() -> list[Component]:
+    """The components that are cloned and self-tested here."""
+    return components("pack")
+
+
+def clone(pack: Component) -> None:
     """Clone a pack at its ref, or bring a checkout that is already there up to that ref.
 
     The pack's source is installed from the ref's tip, so the tests must be read from the same
@@ -92,7 +100,7 @@ def clone(pack: Pack) -> None:
     )
 
 
-def install_pack_test_deps(pack: Pack) -> None:
+def install_pack_test_deps(pack: Component) -> None:
     """Install a cloned pack's non-workspace dev dependencies into the assembled environment.
 
     A pack's tests import its own dev tools (respx, pytest plugins) that the ecosystem
@@ -110,7 +118,7 @@ def install_pack_test_deps(pack: Pack) -> None:
     subprocess.run(["uv", "pip", "install", *wanted], check=True)
 
 
-def run_pack_tests(pack: Pack) -> bool:
+def run_pack_tests(pack: Component) -> bool:
     """Run one pack's own pytest suite against the assembled environment."""
     if not pack.tests.is_dir():
         print(f"  skip    {pack.name}: no tests/ directory")
@@ -233,7 +241,11 @@ def run_integration_tests() -> bool:
 def main() -> int:
     """Assemble the ecosystem and run every suite, returning a shell exit code."""
     parser = argparse.ArgumentParser(description="Assemble and run the dirigent ecosystem.")
-    parser.add_argument("--clone-only", action="store_true", help="Clone the packs and stop.")
+    parser.add_argument(
+        "--clone-only",
+        action="store_true",
+        help="Clone every component named in the manifest, the runtime included, and stop.",
+    )
     args = parser.parse_args()
 
     the_packs = packs()
@@ -242,6 +254,11 @@ def main() -> int:
     for pack in the_packs:
         clone(pack)
     if args.clone_only:
+        # The runtime is installed from git, so a checkout of it is only ever wanted for the
+        # example corpus no wheel carries; `make dev-seeded` seeds from it, the suites never
+        # read it, and a run without --clone-only leaves it alone.
+        for runtime in components("runtime"):
+            clone(runtime)
         return 0
 
     results: dict[str, bool] = {}
