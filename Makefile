@@ -48,7 +48,7 @@ dev: sync ui
 # secret key is minted per boot: the state is wiped first, so no connection an older key
 # sealed survives to be opened.
 dev-seeded: sync ui
-	DIRIGENT_SECRET_KEY="$$($(UV) run python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')" \
+	DIRIGENT_SECRET_KEY="$$($(UV) run dg secret-key)" \
 	  DIRIGENT_ENABLED_UNSAFE_BLOCKS=$(UNSAFE_BLOCKS) \
 	  DIRIGENT_UI_DIR=$(UI_DIST) \
 	  $(UV) run dg dev --wipe-state --seed-installed --host $(DEV_HOST) --port $(DEV_PORT)
