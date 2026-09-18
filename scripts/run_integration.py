@@ -103,9 +103,9 @@ def clone(pack: Component) -> None:
 def install_pack_test_deps(pack: Component) -> None:
     """Install a cloned pack's non-workspace dev dependencies into the assembled environment.
 
-    A pack's tests import its own dev tools (respx, pytest plugins) that the ecosystem
-    installs the pack without. The workspace deps (dirigent-*, dhis2w-*) are already present;
-    only the third-party ones from the pack's dev group need adding.
+    A pack's tests import its own dev tools -- pytest and pytest-asyncio, jsonschema, pyyaml --
+    that the ecosystem installs the pack without. The workspace deps (dirigent-*, dhis2w-*) are
+    already present; only the third-party ones from the pack's dev group need adding.
     """
     config = pack.path / "pyproject.toml"
     if not config.exists():

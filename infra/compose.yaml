@@ -1,6 +1,6 @@
 name: dirigent-full
 
-# The batteries-included stack: the same four services as dirigent's own compose.yaml, running
+# The batteries-included stack: PostgreSQL, a one-shot migrate, a server and a worker, running
 # the image built from this repo -- dirigent plus every official pack -- and seeding the
 # cross-boundary examples authored here.
 #
