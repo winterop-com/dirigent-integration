@@ -54,8 +54,10 @@ One target, one green or red:
 4. validate the cross-boundary examples against the merged catalog;
 5. run the integration's own tests.
 
-A pack whose checkout is already present is reused. Other targets: `make sync`, `make clone`,
-`make lint`, `make clean`.
+A pack whose checkout is already present is moved to its ref's tip, so the tests read from the
+same commit the source was installed from; one with local changes is left where it is and
+reported, which is what lets a copy of a sibling working tree stand in for a clone. Other
+targets: `make lock`, `make sync`, `make clone`, `make lint`, `make clean`.
 
 ## An instance to look at
 
@@ -166,9 +168,9 @@ builds one layer on it (dirigent's operations guide, "The image"), and `dg init 
 compose` writes that Dockerfile. This repository builds the assembled image because it is the
 one place the whole set is already resolved, and the stack below runs it.
 
-`infra/Dockerfile` builds it from this repository's `pyproject.toml` and `uv.lock` in three
-stages: a bun stage that builds the UI bundle from the very dirigent commit the lock resolved
-(`scripts/dirigent_rev.py` reads it out of the lock -- dirigent-server installed from git
+`infra/Dockerfile` builds it from this repository's `pyproject.toml` and `uv.lock` in four
+stages: a lock stage where `scripts/dirigent_rev.py` reads the dirigent commit out of the lock,
+a bun stage that builds the UI bundle from that very commit (dirigent-server installed from git
 carries no bundle, because its `static/` is gitignored there), a uv stage that runs
 `uv sync --locked --no-dev`, and a runtime stage that mirrors the runtime stage of dirigent's
 own `infra/Dockerfile` and must move with it.
@@ -191,7 +193,8 @@ make up
 ```
 
 Four services -- postgres, a one-shot migration, the server and a worker -- with the
-cross-boundary shelves mounted as the apply directory, so those pipelines are seeded at boot. The UI is on http://localhost:3333; `make down` removes it, volumes and all.
+cross-boundary shelves mounted as the apply directory, so those pipelines are seeded at boot.
+The UI is on http://localhost:3333; `make down` removes it, volumes and all.
 
 ## CI
 
