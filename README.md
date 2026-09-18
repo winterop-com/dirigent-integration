@@ -1,5 +1,8 @@
 # dirigent-integration
 
+[![Integration](https://github.com/winterop-com/dirigent-integration/actions/workflows/ci.yaml/badge.svg?branch=main)](https://github.com/winterop-com/dirigent-integration/actions/workflows/ci.yaml)
+[![Release](https://img.shields.io/github/v/release/winterop-com/dirigent-integration?label=release)](https://github.com/winterop-com/dirigent-integration/releases)
+
 The control center for the dirigent plugin ecosystem. This is the one place aware of every
 official pack at once -- it assembles them into a single environment and runs everyone
 together to prove they still compose.
