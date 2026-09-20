@@ -15,7 +15,14 @@ dependencies = [
     "dirigent-server",
     "dirigent-core[otlp]",
     "dirigent-blocks",
-    "dirigent-parquet",
+    "dirigent-block-base",
+    "dirigent-block-http",
+    "dirigent-block-storage",
+    "dirigent-block-execute",
+    "dirigent-block-sql",
+    "dirigent-block-transform",
+    "dirigent-block-queues",
+    "dirigent-block-parquet",
     "dirigent-storage-s3",
     "dirigent-plugin",
     "dirigent-common",
@@ -43,7 +50,14 @@ dirigent-cli = { git = "https://github.com/winterop-com/dirigent", subdirectory 
 dirigent-server = { git = "https://github.com/winterop-com/dirigent", subdirectory = "packages/dirigent-server", branch = "main" }
 dirigent-core = { git = "https://github.com/winterop-com/dirigent", subdirectory = "packages/dirigent-core", branch = "main" }
 dirigent-blocks = { git = "https://github.com/winterop-com/dirigent", subdirectory = "packages/dirigent-blocks", branch = "main" }
-dirigent-parquet = { git = "https://github.com/winterop-com/dirigent", subdirectory = "packages/dirigent-parquet", branch = "main" }
+dirigent-block-base = { git = "https://github.com/winterop-com/dirigent", subdirectory = "packages/dirigent-block-base", branch = "main" }
+dirigent-block-http = { git = "https://github.com/winterop-com/dirigent", subdirectory = "packages/dirigent-block-http", branch = "main" }
+dirigent-block-storage = { git = "https://github.com/winterop-com/dirigent", subdirectory = "packages/dirigent-block-storage", branch = "main" }
+dirigent-block-execute = { git = "https://github.com/winterop-com/dirigent", subdirectory = "packages/dirigent-block-execute", branch = "main" }
+dirigent-block-sql = { git = "https://github.com/winterop-com/dirigent", subdirectory = "packages/dirigent-block-sql", branch = "main" }
+dirigent-block-transform = { git = "https://github.com/winterop-com/dirigent", subdirectory = "packages/dirigent-block-transform", branch = "main" }
+dirigent-block-queues = { git = "https://github.com/winterop-com/dirigent", subdirectory = "packages/dirigent-block-queues", branch = "main" }
+dirigent-block-parquet = { git = "https://github.com/winterop-com/dirigent", subdirectory = "packages/dirigent-block-parquet", branch = "main" }
 dirigent-storage-s3 = { git = "https://github.com/winterop-com/dirigent", subdirectory = "packages/dirigent-storage-s3", branch = "main" }
 dirigent-plugin = { git = "https://github.com/winterop-com/dirigent", subdirectory = "packages/dirigent-plugin", branch = "main" }
 dirigent-common = { git = "https://github.com/winterop-com/dirigent", subdirectory = "packages/dirigent-common", branch = "main" }
