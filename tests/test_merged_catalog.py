@@ -20,9 +20,11 @@ INTEGRATION_EXAMPLES = ROOT / "examples"
 
 #: The blocks each pack is expected to contribute, keyed by the plugin name the pack registers
 #: under, so their presence in one catalog and their attribution to the right pack are proven.
+#: The built-in families each register as their own plugin; the umbrella contributes none.
 EXPECTED_BLOCKS = {
-    "builtin": ["http.request", "storage.copy"],
-    "parquet": ["convert.arrow"],
+    "block-http": ["http.request"],
+    "block-storage": ["storage.copy"],
+    "block-parquet": ["convert.arrow"],
     "dhis2": [
         "dhis2.analytics_query",
         "dhis2.analytics_run",
@@ -41,6 +43,11 @@ EXPECTED_STORAGE_SCHEMES = ["s3"]
 EXPECTED_CONNECTION_KINDS = ["dhis2", "s3"]
 
 CROSS_BOUNDARY = sorted(INTEGRATION_EXAMPLES.rglob("*.yaml"))
+
+
+def pack_of(plugin: str) -> str:
+    """The pack a plugin belongs to: the built-in families and their umbrella are one pack."""
+    return "dirigent" if plugin == "builtin" or plugin.startswith("block-") else plugin
 
 
 def test_the_host_loaded_more_than_one_plugin(host: PluginHost) -> None:
@@ -156,12 +163,12 @@ def test_a_connection_of_an_uninstalled_kind_is_refused(host: PluginHost) -> Non
 def test_a_cross_boundary_example_spans_more_than_one_pack(catalog: Catalog, path: Path) -> None:
     definition = yaml.safe_load(path.read_text())
     used = {step["block"] for step in definition.get("steps", {}).values()}
-    plugins = {catalog.block(block).plugin for block in used if catalog.block(block) is not None}
+    plugins = {pack_of(catalog.block(block).plugin) for block in used if catalog.block(block) is not None}
     # A pack is spanned by the connection kinds it contributes as much as by its blocks: a
     # document that reaches DHIS2 through http.request on a dhis2 connection crosses into
     # the dhis2 pack, since only that pack makes the connection exist.
     kinds = {connection.get("kind") for connection in definition.get("connections", {}).values()}
-    owners = {entry.id: entry.plugin for entry in catalog.connection_kinds}
+    owners = {entry.id: pack_of(entry.plugin) for entry in catalog.connection_kinds}
     plugins |= {owners[kind] for kind in kinds if kind in owners}
     assert len(plugins) > 1, (
         f"{path.name} names blocks and connection kinds from only {plugins}; a cross-boundary example spans packs"
