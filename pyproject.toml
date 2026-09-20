@@ -21,7 +21,7 @@ dependencies = [
     "dirigent-block-execute",
     "dirigent-block-sql",
     "dirigent-block-sql-duckdb",
-    "dirigent-block-transform",
+    "dirigent-block-transform-jq",
     "dirigent-block-queues",
     "dirigent-block-parquet",
     "dirigent-storage-s3",
@@ -57,7 +57,7 @@ dirigent-block-storage = { git = "https://github.com/winterop-com/dirigent", sub
 dirigent-block-execute = { git = "https://github.com/winterop-com/dirigent", subdirectory = "packages/dirigent-block-execute", branch = "main" }
 dirigent-block-sql = { git = "https://github.com/winterop-com/dirigent", subdirectory = "packages/dirigent-block-sql", branch = "main" }
 dirigent-block-sql-duckdb = { git = "https://github.com/winterop-com/dirigent", subdirectory = "packages/dirigent-block-sql-duckdb", branch = "main" }
-dirigent-block-transform = { git = "https://github.com/winterop-com/dirigent", subdirectory = "packages/dirigent-block-transform", branch = "main" }
+dirigent-block-transform-jq = { git = "https://github.com/winterop-com/dirigent", subdirectory = "packages/dirigent-block-transform-jq", branch = "main" }
 dirigent-block-queues = { git = "https://github.com/winterop-com/dirigent", subdirectory = "packages/dirigent-block-queues", branch = "main" }
 dirigent-block-parquet = { git = "https://github.com/winterop-com/dirigent", subdirectory = "packages/dirigent-block-parquet", branch = "main" }
 dirigent-storage-s3 = { git = "https://github.com/winterop-com/dirigent", subdirectory = "packages/dirigent-storage-s3", branch = "main" }
