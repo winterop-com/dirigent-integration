@@ -20,6 +20,7 @@ bundle from; no suite reads it, so a full run never clones it.
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 import subprocess
 import sys
 import tomllib
@@ -27,6 +28,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import yaml
+from packaging.requirements import InvalidRequirement, Requirement
+from packaging.utils import canonicalize_name
 
 if TYPE_CHECKING:
     from dirigent_core.plugins import PluginHost
@@ -100,21 +103,52 @@ def clone(pack: Component) -> None:
     )
 
 
-def install_pack_test_deps(pack: Component) -> None:
-    """Install a cloned pack's non-workspace dev dependencies into the assembled environment.
+def missing_dev_dependencies(dev: list[Any], present: set[str]) -> list[str]:
+    """The entries of a dev group naming a distribution `present` does not hold, in its order.
 
-    A pack's tests import its own dev tools -- pytest and pytest-asyncio, jsonschema, pyyaml --
-    that the ecosystem installs the pack without. The workspace deps (dirigent-*, dhis2w-*) are
-    already present; only the third-party ones from the pack's dev group need adding.
+    Names compare canonically. An entry that is not a plain string, that is not a requirement,
+    or whose marker the running interpreter does not satisfy, names nothing to install here.
+    """
+    held = {canonicalize_name(name) for name in present}
+    wanted: list[str] = []
+    for entry in dev:
+        if not isinstance(entry, str):
+            continue
+        try:
+            requirement = Requirement(entry)
+        except InvalidRequirement:
+            continue
+        if requirement.marker is not None and not requirement.marker.evaluate():
+            continue
+        if canonicalize_name(requirement.name) in held:
+            continue
+        wanted.append(entry)
+    return wanted
+
+
+def installed_distributions() -> set[str]:
+    """The canonical name of every distribution the running environment provides."""
+    return {canonicalize_name(dist.name) for dist in importlib.metadata.distributions() if dist.name}
+
+
+def install_pack_test_deps(pack: Component) -> None:
+    """Install what the assembled environment lacks of a cloned pack's dev dependencies.
+
+    A pack's tests import dev tools the ecosystem installs the pack without. An entry naming a
+    distribution the environment already holds is skipped, so the pack's own runtime
+    dependencies, its client library among them, every dirigent package, and the test tools this
+    repository's dev group carries stay as assembled, never reinstalled from an index.
     """
     config = pack.path / "pyproject.toml"
     if not config.exists():
         return
     dev = tomllib.loads(config.read_text()).get("dependency-groups", {}).get("dev", [])
-    wanted = [d for d in dev if isinstance(d, str) and not d.startswith(("dirigent-", "dhis2w-"))]
+    wanted = missing_dev_dependencies(dev, installed_distributions())
+    held = [entry for entry in dev if isinstance(entry, str) and entry not in wanted]
+    installing = ", ".join(wanted) if wanted else "nothing"
+    print(f"  deps    {pack.name}: installing {installing}; present already: {', '.join(held) or 'none'}")
     if not wanted:
         return
-    print(f"  deps    {pack.name}: {', '.join(wanted)}")
     subprocess.run(["uv", "pip", "install", *wanted], check=True)
 
 
