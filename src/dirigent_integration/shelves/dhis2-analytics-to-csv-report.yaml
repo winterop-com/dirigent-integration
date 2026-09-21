@@ -141,8 +141,10 @@ steps:
       source: ${steps.staged.output.uri}
       from: json
       to: csv
-      # The object outlives the run, which is the whole point of writing to s3:// rather than
-      # ${run.scratch}: a person fetches this after the run is long finished.
+      # The report outlives the run, so ${run.scratch} is out: retention sweeps a run's prefix
+      # with the run. ${artifacts}/<path> is the portable way to keep something -- the instance's
+      # own storage root, which nothing sweeps -- and a named bucket is the other case, which is
+      # this one: the csv has to land in the reporting bucket people already fetch reports from.
       target: s3://${params.bucket}/dhis2/analytics/${params.period}.csv
 
   summary:
