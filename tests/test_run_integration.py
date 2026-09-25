@@ -8,7 +8,7 @@ from run_integration import missing_dev_dependencies
 
 
 def test_a_present_distribution_is_skipped_whatever_its_prefix():
-    dev = ["dhis2w-client>=1.14", "dirigent-testing==0.18.3", "httpx2>=0.1", "pytest>=8"]
+    dev = ["dhis2w-client>=1.14", "dirigent-testing==0.18.4", "httpx2>=0.1", "pytest>=8"]
     present = {"dhis2w-client", "dirigent-testing", "httpx2", "pytest"}
     assert missing_dev_dependencies(dev, present) == []
 
