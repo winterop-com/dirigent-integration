@@ -7,10 +7,19 @@ requires-python = ">=3.13"
 license = "LicenseRef-Proprietary"
 license-files = ["LICENSE"]
 
-# The assembled runtime: the dirigent packages needed to load a full catalog and run dg dev,
-# plus every official pack. The integration is the integration layer, so unlike a pack it may
-# depend on dirigent-core directly.
+# A published install carries the cross-boundary shelves and nothing else: each document
+# names the packs it needs under requires, and the Examples screen marks what is missing.
 dependencies = [
+    "dirigent-plugin",
+]
+
+# dirigent-testing is dev-only: the packs' suites import it, and nothing at runtime does,
+# so the batteries-included image built from this lock does not carry it.
+[dependency-groups]
+# The assembled runtime the control center tests: the dirigent packages needed to load a
+# full catalog and run dg dev, plus every official pack. It is a default group, so a sync of
+# this checkout installs it, and it never reaches the published metadata.
+assembly = [
     "dirigent-cli",
     "dirigent-server",
     "dirigent-core[otlp]",
@@ -25,16 +34,11 @@ dependencies = [
     "dirigent-block-queues",
     "dirigent-block-parquet",
     "dirigent-storage-s3",
-    "dirigent-plugin",
     "dirigent-common",
     "dirigent-client",
     "dirigent-examples",
     "dirigent-dhis2",
 ]
-
-# dirigent-testing is dev-only: the packs' suites import it, and nothing at runtime does,
-# so the batteries-included image built from this lock does not carry it.
-[dependency-groups]
 dev = [
     "dirigent-testing",
     "pytest>=8",
@@ -46,6 +50,9 @@ dev = [
 # All component packages ride their tracked branch, unpinned: the integration always assembles
 # the latest ecosystem. The dirigent runtime packages come from the monorepo by subdirectory;
 # dirigent-dhis2 comes from its own repository.
+[tool.uv]
+default-groups = ["dev", "assembly"]
+
 [tool.uv.sources]
 dirigent-cli = { git = "https://github.com/winterop-com/dirigent", subdirectory = "packages/dirigent-cli", branch = "main" }
 dirigent-server = { git = "https://github.com/winterop-com/dirigent", subdirectory = "packages/dirigent-server", branch = "main" }
