@@ -83,9 +83,10 @@ targets listen.
 
 `dev-seeded` mints a `DIRIGENT_SECRET_KEY` per boot, because a connection carrying a credential
 cannot be stored without one and the state is wiped first anyway, and it allows the unsafe
-blocks the corpora teach with (`UNSAFE_BLOCKS`). What stays refused is what no local instance
-holds: an object-store or warehouse connection nothing created, a schema a sibling document
-registers, a `docker.compose` step, a pipeline the corpus applies later.
+blocks the corpora teach with (`UNSAFE_BLOCKS`): `shell.run`, and the `docker` blocks that run,
+build and compose. What stays refused is what no local instance holds: a connection to a system
+nothing here runs, such as an object store, a warehouse or ODK Central, that no file in the
+corpora declares.
 
 dirigent-server installed from git carries no UI bundle -- its `static/` is gitignored there --
 so both targets build one in the cloned checkout (`make ui`, which needs bun) and point the
