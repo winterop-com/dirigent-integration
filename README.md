@@ -52,7 +52,9 @@ One target, one green or red:
 2. run each pack's own pytest suite against the assembled environment;
 3. validate each pack's own examples against the merged catalog;
 4. validate the cross-boundary examples against the merged catalog;
-5. run the integration's own tests.
+5. run the integration's own tests;
+6. ask every DHIS2 play demo an example names for its system info, and fail on any that no
+   longer answers.
 
 A pack whose checkout is already present is moved to its ref's tip, so the tests read from the
 same commit the source was installed from; one with local changes is left where it is and
