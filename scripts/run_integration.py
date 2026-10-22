@@ -7,7 +7,8 @@ installed together, it:
   b. runs each pack's own pytest suite;
   c. validates each pack's own examples, and the bodies they carry, against the merged catalog;
   d. validates the integration's own cross-boundary examples against the merged catalog;
-  e. runs the integration's own tests.
+  e. runs the integration's own tests;
+  f. asks every DHIS2 play demo an example names whether it still answers.
 
 It reports one green or red. A pack repository whose checkout already exists is moved to its
 ref's tip; one with local changes is left where it is, which is what lets a local, offline
@@ -20,12 +21,17 @@ bundle from; no suite reads it, so a full run never clones it.
 from __future__ import annotations
 
 import argparse
+import base64
 import importlib.metadata
 import subprocess
 import sys
 import tomllib
+import urllib.error
+import urllib.request
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit
 
 import yaml
 from packaging.requirements import InvalidRequirement, Requirement
@@ -39,6 +45,12 @@ MANIFEST = ROOT / "ecosystem.yaml"
 CHECKOUTS = ROOT / "checkouts"
 INTEGRATION_EXAMPLES = ROOT / "src" / "dirigent_integration" / "shelves"
 INTEGRATION_TESTS = ROOT / "tests"
+
+#: The hosts DHIS2 serves its public play demos from, which retire a version without notice.
+PLAY_HOSTS = frozenset({"play.im.dhis2.org", "play.dhis2.org"})
+
+#: How long one play demo is given to answer.
+PLAY_TIMEOUT_SECONDS = 30
 
 
 class Component:
@@ -266,6 +278,77 @@ def validate_examples(label: str, directories: list[Path]) -> bool:
     return ok
 
 
+class PlayDemo:
+    """One play demo address, the credentials an example signs in with, and who names it."""
+
+    def __init__(self, base_url: str, username: str | None, password: str | None) -> None:
+        """Bind an address to the first credentials an example gave for it."""
+        self.base_url = base_url
+        self.username = username
+        self.password = password
+        self.named_by: list[Path] = []
+
+
+def play_demos(directories: list[Path]) -> dict[str, PlayDemo]:
+    """Every play demo a carried ``dhis2`` connection points at, keyed by its address."""
+    demos: dict[str, PlayDemo] = {}
+    for directory in directories:
+        if not directory.is_dir():
+            continue
+        for path in example_documents(directory):
+            definition = yaml.safe_load(path.read_text()) or {}
+            connections = definition.get("connections") if isinstance(definition, dict) else None
+            for connection in (connections or {}).values():
+                if not isinstance(connection, dict) or connection.get("kind") != "dhis2":
+                    continue
+                config = connection.get("config") or {}
+                base_url = config.get("base_url")
+                if not isinstance(base_url, str) or urlsplit(base_url).hostname not in PLAY_HOSTS:
+                    continue
+                base_url = base_url.rstrip("/")
+                demo = demos.setdefault(
+                    base_url, PlayDemo(base_url, config.get("basic_username"), config.get("basic_password"))
+                )
+                if path not in demo.named_by:
+                    demo.named_by.append(path)
+    return demos
+
+
+def demo_status(demo: PlayDemo) -> int | str:
+    """The status a play demo's system info answers with, or why nothing answered."""
+    request = urllib.request.Request(f"{demo.base_url}/api/system/info")
+    if demo.username and demo.password:
+        token = base64.b64encode(f"{demo.username}:{demo.password}".encode()).decode()
+        request.add_header("Authorization", f"Basic {token}")
+    try:
+        with urllib.request.urlopen(request, timeout=PLAY_TIMEOUT_SECONDS) as response:
+            return int(response.status)
+    except urllib.error.HTTPError as error:
+        return error.code
+    except (urllib.error.URLError, TimeoutError) as error:
+        return str(getattr(error, "reason", error))
+
+
+def check_play_demos(directories: list[Path], status: Callable[[PlayDemo], int | str] = demo_status) -> bool:
+    """Ask every play demo the examples name for its system info; any answer but 200 fails."""
+    print("\n=== play demos the examples name ===")
+    demos = play_demos(directories)
+    if not demos:
+        print("  (no example names a play demo)")
+        return True
+    ok = True
+    for demo in demos.values():
+        answer = status(demo)
+        if answer == 200:
+            print(f"  ok       {demo.base_url}  ({len(demo.named_by)} examples)")
+            continue
+        ok = False
+        print(f"  gone     {demo.base_url}  answered {answer}, named by:")
+        for path in demo.named_by:
+            print(f"    - {path.relative_to(ROOT) if ROOT in path.parents else path}")
+    return ok
+
+
 def run_integration_tests() -> bool:
     """Run the integration's own pytest suite."""
     print("\n=== pytest: dirigent-integration ===")
@@ -306,6 +389,8 @@ def main() -> int:
     results["cross-boundary examples"] = validate_examples("cross-boundary", [INTEGRATION_EXAMPLES])
 
     results["integration tests"] = run_integration_tests()
+
+    results["play demos"] = check_play_demos([pack.examples for pack in the_packs] + [INTEGRATION_EXAMPLES])
 
     print("\n=== integration summary ===")
     for name, passed in results.items():
