@@ -76,7 +76,7 @@ COPY --from=frontend /src/dirigent/packages/dirigent-server/frontend/dist/ \
 
 # This stage mirrors the runtime stage of dirigent's infra/Dockerfile and must move with it:
 # the same base digest, packages, uid, environment defaults, artifact directory and entrypoint.
-FROM python:3.13-slim-bookworm@sha256:c45a22ea000adfd9cda29364bbe7edd23001ce5cc2ad15857cfbf7766943b9ca AS runtime
+FROM python:3.13-slim-bookworm@sha256:a881a81282cca8c57f97014867fa651def1b3799030cc6b1cff45ed55ba8ef36 AS runtime
 
 # The docker CLI, compose and buildx plugins, so the docker.compose.* and docker.build blocks
 # have something to shell out to. The daemon itself is never in this image: these speak to a
