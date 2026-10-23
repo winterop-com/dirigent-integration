@@ -54,7 +54,11 @@ One target, one green or red:
 4. validate the cross-boundary examples against the merged catalog;
 5. run the integration's own tests;
 6. ask every DHIS2 play demo an example names for its system info, and fail on any that no
-   longer answers.
+   longer answers;
+7. check those demos against the DHIS2 Instance Manager's public list, and fail on one whose
+   version has a newer stable patch, before the old address is retired;
+8. rehearse an export and a dry-run import against the newest stable demo of 2.42 and of 2.43,
+   the versions the packs target, and fail unless values moved and the import was clean.
 
 A pack whose checkout is already present is moved to its ref's tip, so the tests read from the
 same commit the source was installed from; one with local changes is left where it is and

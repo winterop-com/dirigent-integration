@@ -8,7 +8,11 @@ installed together, it:
   c. validates each pack's own examples, and the bodies they carry, against the merged catalog;
   d. validates the integration's own cross-boundary examples against the merged catalog;
   e. runs the integration's own tests;
-  f. asks every DHIS2 play demo an example names whether it still answers.
+  f. asks every DHIS2 play demo an example names whether it still answers;
+  g. checks each of those demos against the public instance list, so a superseded one is
+     named before it is retired;
+  h. rehearses an export and a dry-run import against the newest demo of each targeted
+     DHIS2 version.
 
 It reports one green or red. A pack repository whose checkout already exists is moved to its
 ref's tip; one with local changes is left where it is, which is what lets a local, offline
@@ -23,8 +27,11 @@ from __future__ import annotations
 import argparse
 import base64
 import importlib.metadata
+import json
+import re
 import subprocess
 import sys
+import tempfile
 import tomllib
 import urllib.error
 import urllib.request
@@ -51,6 +58,27 @@ PLAY_HOSTS = frozenset({"play.im.dhis2.org", "play.dhis2.org"})
 
 #: How long one play demo is given to answer.
 PLAY_TIMEOUT_SECONDS = 30
+
+#: The DHIS2 Instance Manager's list of the public instances, the play demos among them.
+PUBLIC_INSTANCES = "https://api.im.dhis2.org/instances/public"
+
+#: The DHIS2 versions the packs are built for, each followed at its newest stable play demo.
+DHIS2_TARGETS = ("2.42", "2.43")
+
+#: A stable play demo's name: the version it serves, patch included.
+STABLE_DEMO = re.compile(r"^stable-(\d+)-(\d+)-(\d+)$")
+
+#: A play demo address in a document, which a rehearsal points at its target instead.
+PLAY_ADDRESS = re.compile(r"https://play\.im\.dhis2\.org/stable-\d+-\d+-\d+")
+
+#: The example a rehearsal runs: an export, then the same values imported as a dry run.
+REHEARSAL = "dhis2-rehearse-import.yaml"
+
+#: The play demos' full-access account, which holds the root org unit on every version.
+REHEARSAL_ACCOUNT = ("system", "System123")
+
+#: How long one rehearsal run may take.
+REHEARSAL_TIMEOUT_SECONDS = 300
 
 
 class Component:
@@ -349,6 +377,154 @@ def check_play_demos(directories: list[Path], status: Callable[[PlayDemo], int |
     return ok
 
 
+def stable_demos(listing: Any) -> dict[str, tuple[int, str]]:
+    """Index the public instance list's stable demos by version, keeping the newest patch of each."""
+    newest: dict[str, tuple[int, str]] = {}
+    groups = listing if isinstance(listing, list) else []
+    for group in groups:
+        for category in (group or {}).get("categories") or []:
+            for instance in (category or {}).get("instances") or []:
+                found = STABLE_DEMO.match(str((instance or {}).get("name", "")))
+                hostname = (instance or {}).get("hostname")
+                if found is None or not isinstance(hostname, str):
+                    continue
+                version, patch = f"{found.group(1)}.{found.group(2)}", int(found.group(3))
+                if version not in newest or patch > newest[version][0]:
+                    newest[version] = (patch, hostname.rstrip("/"))
+    return newest
+
+
+def public_instances() -> Any:
+    """Read the public instance list, or None when it cannot be read."""
+    try:
+        with urllib.request.urlopen(PUBLIC_INSTANCES, timeout=PLAY_TIMEOUT_SECONDS) as response:
+            return json.loads(response.read())
+    except (urllib.error.URLError, TimeoutError, ValueError) as error:
+        print(f"  unread   {PUBLIC_INSTANCES}: {getattr(error, 'reason', error)}")
+        return None
+
+
+def check_demos_current(directories: list[Path], listing: Any) -> bool:
+    """Fail on a stable demo an example names that a newer patch of its version has superseded.
+
+    A demo is retired when its version's next patch is published, so the example has a day or
+    so before its address stops answering; this is where that day starts. Every targeted
+    version has to be listed too, or there is nothing to move to.
+    """
+    print("\n=== play demos against the public instance list ===")
+    newest = stable_demos(listing)
+    if not newest:
+        print("  (the public instance list named no stable demo)")
+        return False
+    ok = True
+    for version in DHIS2_TARGETS:
+        if version not in newest:
+            ok = False
+            print(f"  missing  no stable {version} demo is listed")
+    for demo in play_demos(directories).values():
+        found = STABLE_DEMO.match(urlsplit(demo.base_url).path.strip("/"))
+        if found is None:
+            continue
+        version, patch = f"{found.group(1)}.{found.group(2)}", int(found.group(3))
+        if version not in newest:
+            ok = False
+            print(f"  unlisted {demo.base_url}: no stable {version} demo is listed any more")
+        elif patch < newest[version][0]:
+            ok = False
+            print(f"  behind   {demo.base_url}: {newest[version][1]} has superseded it, named by:")
+            for path in demo.named_by:
+                print(f"    - {path.relative_to(ROOT) if ROOT in path.parents else path}")
+        else:
+            print(f"  current  {demo.base_url}")
+    return ok
+
+
+class Rehearsal:
+    """What one rehearsal run said: whether it succeeded, how many values it exported, and the import's verdict."""
+
+    def __init__(self, succeeded: bool, exported: int, status: str | None, conflicts: int | None) -> None:
+        """Bind what the run's records said."""
+        self.succeeded = succeeded
+        self.exported = exported
+        self.status = status
+        self.conflicts = conflicts
+
+    @property
+    def passed(self) -> bool:
+        """Report whether the round trip moved values and the instance took them cleanly."""
+        return self.succeeded and self.exported > 0 and self.status == "SUCCESS" and self.conflicts == 0
+
+
+def read_rehearsal(stream: str) -> Rehearsal:
+    """Read a rehearsal run's NDJSON records into what it said."""
+    succeeded, exported, status, conflicts = False, 0, None, None
+    for line in stream.splitlines():
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(record, dict):
+            continue
+        if record.get("kind") == "log" and record.get("message") == "import summary":
+            fields = record.get("fields") or {}
+            status, conflicts = fields.get("status"), fields.get("conflict_count")
+        if record.get("kind") == "run" and record.get("message") in ("succeeded", "failed"):
+            succeeded = record["message"] == "succeeded"
+            for step in record.get("steps") or []:
+                body = ((step or {}).get("output") or {}).get("body")
+                if isinstance(body, dict) and isinstance(body.get("dataValues"), list):
+                    exported = max(exported, len(body["dataValues"]))
+    return Rehearsal(succeeded, exported, status, conflicts)
+
+
+def rehearse(document: str, hostname: str) -> Rehearsal:
+    """Run the rehearsal document against one play demo, as the full-access account."""
+    username, password = REHEARSAL_ACCOUNT
+    pointed = PLAY_ADDRESS.sub(hostname, document)
+    pointed = re.sub(r"basic_username: \S+", f"basic_username: {username}", pointed)
+    pointed = re.sub(r"basic_password: \S+", f"basic_password: {password}", pointed)
+    with tempfile.TemporaryDirectory() as scratch:
+        path = Path(scratch) / REHEARSAL
+        path.write_text(pointed)
+        try:
+            finished = subprocess.run(
+                [str(Path(sys.executable).parent / "dg"), "--json", "run", "--local", str(path)],
+                cwd=scratch,
+                capture_output=True,
+                text=True,
+                timeout=REHEARSAL_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired:
+            return Rehearsal(False, 0, None, None)
+    return read_rehearsal(finished.stdout)
+
+
+def rehearse_targets(directories: list[Path], listing: Any, run: Callable[[str, str], Rehearsal] = rehearse) -> bool:
+    """Export and dry-run import against the newest stable demo of every targeted DHIS2 version."""
+    print("\n=== rehearsals against the targeted DHIS2 versions ===")
+    found = [path for directory in directories if directory.is_dir() for path in directory.rglob(REHEARSAL)]
+    if not found:
+        print(f"  (no example is called {REHEARSAL})")
+        return False
+    document = found[0].read_text()
+    newest = stable_demos(listing)
+    ok = True
+    for version in DHIS2_TARGETS:
+        if version not in newest:
+            ok = False
+            print(f"  missing  {version}: no stable demo to rehearse against")
+            continue
+        hostname = newest[version][1]
+        result = run(document, hostname)
+        verdict = "ok      " if result.passed else "failed  "
+        ok = ok and result.passed
+        print(
+            f"  {verdict} {version} {hostname}: run {'succeeded' if result.succeeded else 'failed'}, "
+            f"{result.exported} values exported, import {result.status} with {result.conflicts} conflicts"
+        )
+    return ok
+
+
 def run_integration_tests() -> bool:
     """Run the integration's own pytest suite."""
     print("\n=== pytest: dirigent-integration ===")
@@ -390,7 +566,11 @@ def main() -> int:
 
     results["integration tests"] = run_integration_tests()
 
-    results["play demos"] = check_play_demos([pack.examples for pack in the_packs] + [INTEGRATION_EXAMPLES])
+    every_example = [pack.examples for pack in the_packs] + [INTEGRATION_EXAMPLES]
+    results["play demos"] = check_play_demos(every_example)
+    listing = public_instances()
+    results["play demos current"] = check_demos_current(every_example, listing)
+    results["rehearsals on 2.42 and 2.43"] = rehearse_targets([pack.examples for pack in the_packs], listing)
 
     print("\n=== integration summary ===")
     for name, passed in results.items():
