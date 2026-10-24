@@ -13,7 +13,7 @@ DEV_PORT ?= 3333
 
 #: The blocks the seeded instance allows, because the corpora teach with them and an instance
 #: that refuses them is missing a shelf.
-UNSAFE_BLOCKS ?= '["shell.run", "docker.run"]'
+UNSAFE_BLOCKS ?= '["shell.run", "docker.run", "docker.build", "docker.compose.up", "docker.compose.down"]'
 
 .PHONY: ui test sync lock clone lint clean image up down dev dev-seeded
 
