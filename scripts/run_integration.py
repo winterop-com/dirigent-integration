@@ -68,8 +68,9 @@ DHIS2_TARGETS = ("2.42", "2.43")
 #: A stable play demo's name: the version it serves, patch included.
 STABLE_DEMO = re.compile(r"^stable-(\d+)-(\d+)-(\d+)$")
 
-#: A play demo address in a document, which a rehearsal points at its target instead.
-PLAY_ADDRESS = re.compile(r"https://play\.im\.dhis2\.org/stable-\d+-\d+-\d+")
+#: A play demo address in a document, pinned or a version alias, which a rehearsal points at
+#: its target instead.
+PLAY_ADDRESS = re.compile(r"https://play\.(?:im\.dhis2\.org/stable-\d+-\d+-\d+|dhis2\.org/\d+\.\d+)")
 
 #: The example a rehearsal runs: an export, then the same values imported as a dry run.
 REHEARSAL = "dhis2-rehearse-import.yaml"
@@ -477,12 +478,17 @@ def read_rehearsal(stream: str) -> Rehearsal:
     return Rehearsal(succeeded, exported, status, conflicts)
 
 
-def rehearse(document: str, hostname: str) -> Rehearsal:
-    """Run the rehearsal document against one play demo, as the full-access account."""
+def point_at(document: str, hostname: str) -> str:
+    """Point every play demo address in a document at one demo, signed in as the full-access account."""
     username, password = REHEARSAL_ACCOUNT
     pointed = PLAY_ADDRESS.sub(hostname, document)
     pointed = re.sub(r"basic_username: \S+", f"basic_username: {username}", pointed)
-    pointed = re.sub(r"basic_password: \S+", f"basic_password: {password}", pointed)
+    return re.sub(r"basic_password: \S+", f"basic_password: {password}", pointed)
+
+
+def rehearse(document: str, hostname: str) -> Rehearsal:
+    """Run the rehearsal document against one play demo, as the full-access account."""
+    pointed = point_at(document, hostname)
     with tempfile.TemporaryDirectory() as scratch:
         path = Path(scratch) / REHEARSAL
         path.write_text(pointed)

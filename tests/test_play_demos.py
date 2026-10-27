@@ -9,6 +9,7 @@ from run_integration import (
     check_demos_current,
     check_play_demos,
     play_demos,
+    point_at,
     read_rehearsal,
     rehearse_targets,
     stable_demos,
@@ -154,3 +155,10 @@ def test_one_failed_rehearsal_fails_the_stage(tmp_path: Path) -> None:
     (tmp_path / "dhis2-rehearse-import.yaml").write_text("steps: {}\n")
     outcomes = iter([Rehearsal(True, 16, "SUCCESS", 0), Rehearsal(True, 0, "SUCCESS", 0)])
     assert rehearse_targets([tmp_path], LISTING, lambda document, hostname: next(outcomes)) is False
+
+
+def test_a_rehearsal_points_a_pinned_demo_or_a_version_alias_at_its_target() -> None:
+    target = "https://play.im.dhis2.org/stable-2-42-7"
+    for address in ("https://play.im.dhis2.org/stable-2-43-2", "https://play.dhis2.org/2.43"):
+        document = f"base_url: {address}\nbasic_username: admin\nbasic_password: district\n"
+        assert point_at(document, target) == f"base_url: {target}\nbasic_username: system\nbasic_password: System123\n"
