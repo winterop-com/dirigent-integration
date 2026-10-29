@@ -84,6 +84,9 @@ LISTING = [
                     {"name": "stable-2-43-2", "hostname": "https://play.im.dhis2.org/stable-2-43-2"},
                     {"name": "stable-2-42-7", "hostname": "https://play.im.dhis2.org/stable-2-42-7"},
                     {"name": "stable-2-42-6", "hostname": "https://play.im.dhis2.org/stable-2-42-6"},
+                    {"name": "stable-2-41-10-1", "hostname": "https://play.im.dhis2.org/stable-2-41-10-1"},
+                    {"name": "stable-2-41-10", "hostname": "https://play.im.dhis2.org/stable-2-41-10"},
+                    {"name": "stable-2-41-9-3", "hostname": "https://play.im.dhis2.org/stable-2-41-9-3"},
                 ],
             },
             {"label": "Under Development", "instances": [{"name": "dev-2-43", "hostname": "https://x"}]},
@@ -94,8 +97,9 @@ LISTING = [
 
 def test_the_newest_patch_of_each_version_is_kept() -> None:
     assert stable_demos(LISTING) == {
-        "2.43": (2, "https://play.im.dhis2.org/stable-2-43-2"),
-        "2.42": (7, "https://play.im.dhis2.org/stable-2-42-7"),
+        "2.43": ((2, 0), "https://play.im.dhis2.org/stable-2-43-2"),
+        "2.42": ((7, 0), "https://play.im.dhis2.org/stable-2-42-7"),
+        "2.41": ((10, 1), "https://play.im.dhis2.org/stable-2-41-10-1"),
     }
     assert stable_demos(None) == {}
 
@@ -159,6 +163,10 @@ def test_one_failed_rehearsal_fails_the_stage(tmp_path: Path) -> None:
 
 def test_a_rehearsal_points_a_pinned_demo_or_a_version_alias_at_its_target() -> None:
     target = "https://play.im.dhis2.org/stable-2-42-7"
-    for address in ("https://play.im.dhis2.org/stable-2-43-2", "https://play.dhis2.org/2.43"):
+    for address in (
+        "https://play.im.dhis2.org/stable-2-43-2",
+        "https://play.im.dhis2.org/stable-2-43-2-1",
+        "https://play.dhis2.org/2.43",
+    ):
         document = f"base_url: {address}\nbasic_username: admin\nbasic_password: district\n"
         assert point_at(document, target) == f"base_url: {target}\nbasic_username: system\nbasic_password: System123\n"
