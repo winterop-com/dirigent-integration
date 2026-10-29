@@ -24,7 +24,7 @@ setting (`storage_connections: {s3: <code>}`); the rest need only a network.
 | --- | --- |
 | [`http-json-to-data-values.yaml`](http-json-to-data-values.yaml) | The shortest inbound path: pull a public JSON API, reshape it, gate it on DHIS2's own id and period formats, import it as a dry run. |
 | [`csv-drop-to-data-values.yaml`](csv-drop-to-data-values.yaml) | The file drop: wait for a csv to land in a bucket, decode it, translate the sender's codes to uids through a lookup, drop the rows that carry no measurement. |
-| [`webhook-payload-to-tracker-event.yaml`](webhook-payload-to-tracker-event.yaml) | Push instead of poll: a webhook maps one posted encounter onto parameters, and that mapping is the whole security boundary. |
+| [`endpoint-payload-to-tracker-event.yaml`](endpoint-payload-to-tracker-event.yaml) | Push instead of poll: an endpoint source takes one posted encounter, and the jq step that picks its named fields is the whole security boundary. |
 | [`parquet-lakehouse-to-dhis2.yaml`](parquet-lakehouse-to-dhis2.yaml) | Grain: a parquet table of encounter-level rows reduced to the figures DHIS2 stores, then a completeness sensor that observes rather than registers. |
 | [`fhir-observations-to-data-values.yaml`](fhir-observations-to-data-values.yaml) | Two standards meeting: LOINC codes mapped onto data elements, instants truncated to periods, and the org unit the payload cannot supply. |
 | [`weekly-window-pull-and-import.yaml`](weekly-window-pull-and-import.yaml) | The window: a schedule whose runs pull the week that closed, `${run.window.start}` to `${run.window.end}`, so a late run and a backfill read the same week. |

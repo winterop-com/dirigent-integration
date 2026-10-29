@@ -150,8 +150,8 @@ vocabulary the shelf is built on -- subject, capture, ConceptMap.
   `dhis2.analytics_query` for the same period, and the gap delivered by `webhook.post`.
 - **`examples/fhir/dhis2-to-fhir-observations.yaml`** -- the outbound leg: a data value set
   published as a transaction `Bundle` of conditionally-updated `Observation`s.
-- **`examples/fhir/fhir-subscription-webhook-to-dhis2.yaml`** -- the subscription contract,
-  landing on a webhook whose payload mapping no caller can reach past.
+- **`examples/fhir/fhir-subscription-to-dhis2.yaml`** -- the subscription contract, landing on
+  an endpoint source whose first step picks the only fields any later step sees.
 - **`examples/fhir/fhir-nightly-window-sync.yaml`** -- a half-open `_lastUpdated` window, a
   fan-out per resource type under `items: continue`, and a join that says what it missed.
 
@@ -159,7 +159,7 @@ vocabulary the shelf is built on -- subject, capture, ConceptMap.
 
 `examples/inbound/` is a shelf of eight pipelines going one direction -- an outside system, a
 transform, DHIS2 -- teaching the shapes an inbound integration actually takes: a public JSON
-API, a csv dropped in a bucket, a pushed webhook, a parquet table from a lakehouse, a FHIR
+API, a csv dropped in a bucket, an encounter pushed to an endpoint, a parquet table from a lakehouse, a FHIR
 Observation feed, a windowed weekly pull, a fan-out across facilities, and the defensive
 version with every guard on. Each names every block it needs, carries its DHIS2 connection
 pointed at the public play server, and imports as a dry run by default, so

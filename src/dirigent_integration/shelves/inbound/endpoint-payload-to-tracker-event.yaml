@@ -1,9 +1,8 @@
 # An event posted by an outside system, landing in DHIS2 the moment it is captured.
 #
 # The other examples on this shelf poll or wait. This one is pushed: a mobile capture app,
-# an EMR, a lab middleware POSTs one encounter to this pipeline's webhook and the run starts
-# with that encounter already in its parameters. Nothing is scheduled and nothing is
-# scanned.
+# an EMR, a lab middleware POSTs one encounter to this pipeline's endpoint and the run starts
+# with that request as its source's output. Nothing is scheduled and nothing is scanned.
 #
 # WHERE THIS LANDS, AND WHY IT IS NOT A TRACKER EVENT. An event-shaped capture is what
 # arrives, but `dhis2.tracker` in this pack READS `/api/tracker` -- tracked entities,
@@ -11,51 +10,61 @@
 # today. The encounter is therefore summed into the aggregate figures it contributes to and
 # imported as a data value set, which is what an aggregate DHIS2 wants from an event stream
 # anyway. When a tracker write block lands, only the reshape and the import change; the
-# intake, the mapping table and the guard do not.
+# intake, the pick, the mapping table and the guard do not.
 #
 # The hops, and the shape at each one:
 #
 #   1. the POST     -> {encounter: {facility, occurred_at, items: [{code, quantity}]}}
-#   2. the mapping  -> three params, each one path into that body and nothing else
+#   2. pick         -> {facility, occurred_at, items}, three paths into that body and
+#                      nothing else
 #   3. reshape      -> {dataValues: [{dataElement, period, orgUnit, value}]}, one value per
 #                      distinct item code, quantities summed
 #   4. gate         -> the same, refused unless the ids and the period are DHIS2's own
 #   5. import       -> the instance's summary
 #
-# THE MAPPING IS THE WHOLE SECURITY BOUNDARY. A caller reaches exactly the three parameters
-# named under params_from_payload, and each mapped value is validated against the params
-# schema like any other run's. A payload carrying a connection code, a dry_run: false, or a
-# different org unit reaches none of them, because none of them is mapped.
+# THE PICK IS THE WHOLE SECURITY BOUNDARY. The whole body is the source's output, but only
+# `pick` reads it, and it hands on exactly three named fields, each checked for its type. A
+# payload carrying a connection code, a dry_run: false, or a field nobody asked for reaches
+# no later step, because no path names it; `dry_run` is a parameter, the pipeline's own to
+# decide, and no call can choose it.
 #
 # The period is derived rather than accepted. A capture knows when it happened; it does not
 # get to say which DHIS2 month it belongs to, because that is the receiving instance's
 # vocabulary and a caller that gets it wrong would silently write into the wrong month.
 #
-# Locally, the payload is supplied as parameters, which is exactly what a delivery does:
+# RUN IT BY HAND, here, with no server. No --input takes the source's sample:
 #
-#   dg run --local examples/inbound/webhook-payload-to-tracker-event.yaml \
-#     -p facility=DiszpKrYNg8 -p occurred_at=2026-06-14T09:20:00Z
+#   dg run --local examples/inbound/endpoint-payload-to-tracker-event.yaml
+#   dg run --local examples/inbound/endpoint-payload-to-tracker-event.yaml --input '{body: {
+#     encounter: {facility: DiszpKrYNg8, occurred_at: "2026-06-14T09:20:00Z",
+#     items: [{code: NVP_WITHIN_72H, quantity: 3}]}}}'
 #
-# Against an instance, where the endpoint exists:
+# ON A SERVER, apply it, keep the token the apply printed, and post an encounter:
 #
-#   dg apply examples/inbound/webhook-payload-to-tracker-event.yaml
-#   dg webhook rotate-token webhook-payload-to-tracker-event capture-posted
-#   curl -X POST "$DG_URL/hooks/$TOKEN" -d '{"encounter": {
-#     "facility": "DiszpKrYNg8", "occurred_at": "2026-06-14T09:20:00Z",
+#   dg apply examples/inbound/endpoint-payload-to-tracker-event.yaml
+#   dg source call endpoint-payload-to-tracker-event posted --source-token "$TOKEN" --body '{
+#     "encounter": {"facility": "DiszpKrYNg8", "occurred_at": "2026-06-14T09:20:00Z",
 #     "items": [{"code": "EXPOSED_REGISTERED", "quantity": 2}]}}'
+#   curl -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+#     --data @encounter.json http://localhost:3333/endpoints/captures
+#   dg source inputs endpoint-payload-to-tracker-event posted
+#
+# The token lives on the instance and is shown once; `dg source rotate-token` mints another.
+#
+# EXPECT THIS RUN TO SUCCEED with network access to the play server, the import a dry run.
 
 format: dirigent/v1
 kind: pipeline
-code: webhook-payload-to-tracker-event
+code: endpoint-payload-to-tracker-event
 name: A pushed encounter into DHIS2
 description: |
-  An outside system POSTs one captured encounter; the run reshapes it into a DHIS2 data
-  value set and imports it.
+  An outside system POSTs one captured encounter to an endpoint source; a jq step picks the
+  named fields, and the run reshapes them into a DHIS2 data value set and imports it.
 
   The pack's `dhis2.tracker` block reads `/api/tracker` and does not write it, so an
   event-shaped capture lands as the aggregate figures it contributes to.
 
-tags: [inbound, dhis2, webhook, transform, validate, cross-boundary]
+tags: [inbound, dhis2, sources, transform, validate, cross-boundary]
 
 requires:
   blocks:
@@ -75,28 +84,6 @@ connections:
 params:
   type: object
   properties:
-    facility:
-      type: string
-      description: The uid of the facility the encounter was captured at.
-      default: DiszpKrYNg8
-    occurred_at:
-      type: string
-      format: date-time
-      description: When the encounter happened, which is what the DHIS2 period is derived from.
-      default: "2026-06-14T09:20:00Z"
-    items:
-      type: array
-      description: What was given or done, in the sending system's own item codes.
-      default:
-        - { code: EXPOSED_REGISTERED, quantity: 2 }
-        - { code: NVP_WITHIN_72H, quantity: 1 }
-        - { code: EXPOSED_REGISTERED, quantity: 1 }
-      items:
-        type: object
-        required: [code, quantity]
-        properties:
-          code: { type: string }
-          quantity: { type: integer }
     dry_run:
       type: boolean
       description: Whether the instance validates the import and writes nothing.
@@ -120,16 +107,55 @@ schemas:
             value: { type: string }
 
 steps:
+  posted:
+    source:
+      kind: endpoint
+      path: /captures
+      methods: [POST]
+      accepts: [application/json]
+      max_body: 64KB
+    sample:
+      body:
+        encounter:
+          facility: DiszpKrYNg8
+          occurred_at: "2026-06-14T09:20:00Z"
+          items:
+            - { code: EXPOSED_REGISTERED, quantity: 2 }
+            - { code: NVP_WITHIN_72H, quantity: 1 }
+            - { code: EXPOSED_REGISTERED, quantity: 1 }
+
+  # Three paths into the body, each one typed; anything else the caller sent stops here.
+  pick:
+    block: transform.jq
+    depends_on: [posted]
+    config:
+      input: "${steps.posted.output.body}"
+      program: |
+        .encounter as $e
+        | if ($e | type) != "object" then error("the body carries no encounter object")
+          elif ($e.facility | type) != "string" then error("encounter.facility must be a string")
+          elif ($e.occurred_at | type) != "string" then error("encounter.occurred_at must be a string")
+          elif ($e.items | type) != "array"
+            or ([$e.items[] | select((.code | type) != "string"
+                                     or (.quantity | type) != "number"
+                                     or .quantity != (.quantity | floor))] | length) > 0
+          then error("encounter.items must be a list of {code: string, quantity: integer}")
+          else {facility: $e.facility,
+                occurred_at: $e.occurred_at,
+                items: [$e.items[] | {code, quantity}]}
+          end
+
   # One encounter can carry the same item twice -- two children registered in one visit --
   # so the items are grouped and summed before they become data values. Importing them as
   # two values would have the second silently replace the first rather than add to it.
   reshape:
     block: transform.jq
+    depends_on: [pick]
     config:
       input:
-        facility: "${params.facility}"
-        occurred_at: "${params.occurred_at}"
-        items: "${params.items}"
+        facility: "${steps.pick.output.value.facility}"
+        occurred_at: "${steps.pick.output.value.occurred_at}"
+        items: "${steps.pick.output.value.items}"
         lookup:
           EXPOSED_REGISTERED: x0PshcPLSk1
           NVP_WITHIN_72H: wZqi8EXN5x4
@@ -164,13 +190,3 @@ steps:
       connection: dhis2-demo
       data_values: "${steps.gate.output.value}"
       dry_run: "${params.dry_run}"
-
-triggers:
-  webhooks:
-    - code: capture-posted
-      name: One encounter, pushed
-      description: The capture app POSTs an encounter as it is recorded.
-      params_from_payload:
-        facility: "$.encounter.facility"
-        occurred_at: "$.encounter.occurred_at"
-        items: "$.encounter.items"
