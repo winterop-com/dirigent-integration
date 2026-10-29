@@ -1,6 +1,7 @@
 """The runner asks each play demo the examples name whether it still answers, once per address."""
 
 from pathlib import Path
+from typing import Any
 
 from run_integration import (
     DHIS2_TARGETS,
@@ -74,7 +75,7 @@ def test_no_demo_named_passes(tmp_path: Path) -> None:
 
 
 #: The public instance list as the Instance Manager answers it, trimmed to what is read.
-LISTING = [
+LISTING: list[dict[str, Any]] = [
     {
         "name": "play",
         "categories": [

@@ -74,6 +74,7 @@ ui: clone
 lint:
 	$(UV) run ruff check .
 	$(UV) run ruff format --check .
+	$(UV) run mypy scripts tests
 
 # Build dirigent-full from this repo's pyproject and a freshly resolved lock. The components
 # are public, so GITHUB_TOKEN is optional: unset, the one gh is logged in with is used if gh is
