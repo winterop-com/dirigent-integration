@@ -93,7 +93,7 @@ params:
 
 steps:
   # The capture, written inline so the document runs with nothing set up. In service it is the
-  # body of a webhook delivery (fhir-subscription-webhook-to-dhis2.yaml) or one entry of a
+  # body of an endpoint delivery (fhir-subscription-to-dhis2.yaml) or one entry of a
   # searchset Bundle (capture-bundle-to-data-values.yaml); either way this step's output is
   # exactly one QuestionnaireResponse, and nothing downstream knows where it came from.
   receive:
