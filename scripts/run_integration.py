@@ -65,12 +65,13 @@ PUBLIC_INSTANCES = "https://api.im.dhis2.org/instances/public"
 #: The DHIS2 versions the packs are built for, each followed at its newest stable play demo.
 DHIS2_TARGETS = ("2.42", "2.43")
 
-#: A stable play demo's name: the version it serves, patch included.
-STABLE_DEMO = re.compile(r"^stable-(\d+)-(\d+)-(\d+)$")
+#: A stable play demo's name: the version it serves, patch included, and a hotfix build of
+#: that patch where there is one (``stable-2-42-7-1``).
+STABLE_DEMO = re.compile(r"^stable-(\d+)-(\d+)-(\d+)(?:-(\d+))?$")
 
 #: A play demo address in a document, pinned or a version alias, which a rehearsal points at
 #: its target instead.
-PLAY_ADDRESS = re.compile(r"https://play\.(?:im\.dhis2\.org/stable-\d+-\d+-\d+|dhis2\.org/\d+\.\d+)")
+PLAY_ADDRESS = re.compile(r"https://play\.(?:im\.dhis2\.org/stable-\d+-\d+-\d+(?:-\d+)?|dhis2\.org/\d+\.\d+)")
 
 #: The example a rehearsal runs: an export, then the same values imported as a dry run.
 REHEARSAL = "dhis2-rehearse-import.yaml"
@@ -378,9 +379,14 @@ def check_play_demos(directories: list[Path], status: Callable[[PlayDemo], int |
     return ok
 
 
-def stable_demos(listing: Any) -> dict[str, tuple[int, str]]:
-    """Index the public instance list's stable demos by version, keeping the newest patch of each."""
-    newest: dict[str, tuple[int, str]] = {}
+def build(found: re.Match[str]) -> tuple[int, int]:
+    """A stable demo's patch and hotfix build, which order its builds; no hotfix is build zero."""
+    return int(found.group(3)), int(found.group(4) or 0)
+
+
+def stable_demos(listing: Any) -> dict[str, tuple[tuple[int, int], str]]:
+    """Index the public instance list's stable demos by version, keeping the newest build of each."""
+    newest: dict[str, tuple[tuple[int, int], str]] = {}
     groups = listing if isinstance(listing, list) else []
     for group in groups:
         for category in (group or {}).get("categories") or []:
@@ -389,7 +395,7 @@ def stable_demos(listing: Any) -> dict[str, tuple[int, str]]:
                 hostname = (instance or {}).get("hostname")
                 if found is None or not isinstance(hostname, str):
                     continue
-                version, patch = f"{found.group(1)}.{found.group(2)}", int(found.group(3))
+                version, patch = f"{found.group(1)}.{found.group(2)}", build(found)
                 if version not in newest or patch > newest[version][0]:
                     newest[version] = (patch, hostname.rstrip("/"))
     return newest
@@ -426,7 +432,7 @@ def check_demos_current(directories: list[Path], listing: Any) -> bool:
         found = STABLE_DEMO.match(urlsplit(demo.base_url).path.strip("/"))
         if found is None:
             continue
-        version, patch = f"{found.group(1)}.{found.group(2)}", int(found.group(3))
+        version, patch = f"{found.group(1)}.{found.group(2)}", build(found)
         if version not in newest:
             ok = False
             print(f"  unlisted {demo.base_url}: no stable {version} demo is listed any more")
