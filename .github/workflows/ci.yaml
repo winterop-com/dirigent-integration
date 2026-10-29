@@ -32,5 +32,8 @@ jobs:
       - name: Assemble the runtime
         run: uv sync
 
+      - name: Types (mypy)
+        run: uv run mypy scripts tests
+
       - name: Run the whole ecosystem
         run: uv run python scripts/run_integration.py

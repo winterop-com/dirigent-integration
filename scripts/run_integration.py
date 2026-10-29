@@ -287,8 +287,8 @@ def validate_examples(label: str, directories: list[Path]) -> bool:
         except DocumentError as error:
             ok = False
             print(f"  invalid  {rel}")
-            for problem in error.problems:
-                print(f"    - {problem}")
+            for issue in error.problems:
+                print(f"    - {issue}")
             continue
         issues = validate_against_catalog(
             definition,

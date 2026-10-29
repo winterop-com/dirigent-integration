@@ -163,7 +163,7 @@ def test_a_connection_of_an_uninstalled_kind_is_refused(host: PluginHost) -> Non
 def test_a_cross_boundary_example_spans_more_than_one_pack(catalog: Catalog, path: Path) -> None:
     definition = yaml.safe_load(path.read_text())
     used = {step["block"] for step in definition.get("steps", {}).values()}
-    plugins = {pack_of(catalog.block(block).plugin) for block in used if catalog.block(block) is not None}
+    plugins = {pack_of(entry.plugin) for block in used if (entry := catalog.block(block)) is not None}
     # A pack is spanned by the connection kinds it contributes as much as by its blocks: a
     # document that reaches DHIS2 through http.request on a dhis2 connection crosses into
     # the dhis2 pack, since only that pack makes the connection exist.
