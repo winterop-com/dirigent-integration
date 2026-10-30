@@ -129,8 +129,9 @@ Most of them read a `d2w fhir serve` facade, which publishes one DHIS2 instance 
 endpoint and takes captures back; where a general-purpose FHIR server is the point -- an
 `Encounter`, an `Observation`, a `Subscription`, a `_lastUpdated` search, none of which that
 facade serves -- the default is a public HAPI R4 sandbox instead, and the document's header
-says so. Every write is a dry run: `dryRun=true` on `/api/dataValueSets`, `importMode=VALIDATE`
-on `/api/tracker`.
+says so. Every write to DHIS2 is a dry run: `dryRun=true` on `/api/dataValueSets`,
+`importMode=VALIDATE` on `/api/tracker`. The one real write as shipped is
+`dhis2-to-fhir-observations`, which publishes to that public sandbox.
 
 [`examples/fhir/README.md`](examples/fhir/README.md) has the one-line table and the mapping
 vocabulary the shelf is built on -- subject, capture, ConceptMap.
