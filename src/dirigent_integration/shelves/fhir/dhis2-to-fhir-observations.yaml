@@ -1,7 +1,8 @@
 # The other direction: DHIS2 aggregate values published as a FHIR Bundle of Observations.
 #
 # THE FLOW, END TO END. Export one data value set from DHIS2, turn every data value into an
-# Observation, wrap them in a transaction Bundle, and POST that Bundle to a FHIR server.
+# Observation, wrap them in a transaction Bundle, and POST that Bundle to a FHIR server. As
+# written that server is a public HAPI sandbox, and the POST is real: this one is not a rehearsal.
 #
 # WHY IT IS HERE. Every other document on this shelf reads FHIR and writes DHIS2. This one is
 # the mirror, and a reader who has both in front of them can see what is symmetric and what is

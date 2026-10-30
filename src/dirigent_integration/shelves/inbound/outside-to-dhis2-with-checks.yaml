@@ -40,7 +40,7 @@
 # becomes real by setting it false against an instance of your own.
 #
 #   dg run --local examples/inbound/outside-to-dhis2-with-checks.yaml
-#   dg run --local examples/inbound/outside-to-dhis2-with-checks.yaml -p commit_dry_run=false
+#   dg run --local examples/inbound/outside-to-dhis2-with-checks.yaml -p commit_dry_run=false   # against your own instance
 
 format: dirigent/v1
 kind: pipeline
