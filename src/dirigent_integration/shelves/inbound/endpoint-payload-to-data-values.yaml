@@ -34,20 +34,20 @@
 #
 # RUN IT BY HAND, here, with no server. No --input takes the source's sample:
 #
-#   dg run --local examples/inbound/endpoint-payload-to-tracker-event.yaml
-#   dg run --local examples/inbound/endpoint-payload-to-tracker-event.yaml --input '{body: {
+#   dg run --local examples/inbound/endpoint-payload-to-data-values.yaml
+#   dg run --local examples/inbound/endpoint-payload-to-data-values.yaml --input '{body: {
 #     encounter: {facility: DiszpKrYNg8, occurred_at: "2026-06-14T09:20:00Z",
 #     items: [{code: NVP_WITHIN_72H, quantity: 3}]}}}'
 #
 # ON A SERVER, apply it, keep the token the apply printed, and post an encounter:
 #
-#   dg apply examples/inbound/endpoint-payload-to-tracker-event.yaml
-#   dg source call endpoint-payload-to-tracker-event posted --source-token "$TOKEN" --body '{
+#   dg apply examples/inbound/endpoint-payload-to-data-values.yaml
+#   dg source call endpoint-payload-to-data-values posted --source-token "$TOKEN" --body '{
 #     "encounter": {"facility": "DiszpKrYNg8", "occurred_at": "2026-06-14T09:20:00Z",
 #     "items": [{"code": "EXPOSED_REGISTERED", "quantity": 2}]}}'
 #   curl -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
 #     --data @encounter.json http://localhost:3333/endpoints/captures
-#   dg source inputs endpoint-payload-to-tracker-event posted
+#   dg source inputs endpoint-payload-to-data-values posted
 #
 # The token lives on the instance and is shown once; `dg source rotate-token` mints another.
 #
@@ -55,7 +55,7 @@
 
 format: dirigent/v1
 kind: pipeline
-code: endpoint-payload-to-tracker-event
+code: endpoint-payload-to-data-values
 name: A pushed encounter into DHIS2
 description: |
   Take an encounter posted by an outside system and import it into DHIS2.

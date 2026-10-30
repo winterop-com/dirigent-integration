@@ -27,7 +27,8 @@
 # write nothing. The play server is shared, so leave it true there.
 #
 #   dg run --local examples/inbound/http-json-to-data-values.yaml
-#   dg run --local examples/inbound/http-json-to-data-values.yaml -p country=NGA
+#   dg run --local examples/inbound/http-json-to-data-values.yaml \
+#     -p source_url=https://api.worldbank.org/v2/country/NGA/indicator/SP.POP.TOTL
 
 format: dirigent/v1
 kind: pipeline
@@ -64,10 +65,6 @@ params:
       type: string
       description: The outside feed. Anything answering JSON works; the reshape is what changes.
       default: https://api.worldbank.org/v2/country/SLE/indicator/SP.POP.TOTL
-    country:
-      type: string
-      description: The ISO3 code spliced into source_url when it is left at its default.
-      default: SLE
     data_element:
       type: string
       description: The uid every pulled observation lands on; Total Population, yearly.

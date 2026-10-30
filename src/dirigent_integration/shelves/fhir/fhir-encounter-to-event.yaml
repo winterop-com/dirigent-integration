@@ -8,7 +8,7 @@
 # DHIS2 as forms and captures, so its whole clinical surface is the capture pair, and asking
 # it for an Observation answers an OperationOutcome with code `not-supported`. Encounters come
 # from the other kind of FHIR server: a hospital's own, an OpenMRS, a HAPI. That is the point
-# of this example, so `fhir_base` defaults to the public HAPI R4 test server. It is a shared
+# of this example, so the `fhir-clinical` connection points at the public HAPI R4 test server. It is a shared
 # sandbox anyone can write to, so the resources it holds change under you; every id below is a
 # parameter for that reason, and the searches are written to survive not finding one.
 #
@@ -51,11 +51,11 @@
 # each entry is one LOINC code and the DHIS2 data element uid it lands in. The stage the event
 # belongs to is `program_stage`, and the program and enrollment are `program` and
 # `enrollment_uid`. An observation whose LOINC code is not in the table is dropped and counted
-# -- conceptmap-driven-mapping.yaml is the same mapping fetched from a server instead.
+# -- fhir-conceptmap-driven-mapping.yaml is the same mapping fetched from a server instead.
 #
 # WHAT THIS DOES NOT DO. It does not resolve the Encounter's Patient to a DHIS2 tracked entity.
-# That is a real lookup against a real identifier crosswalk, and patient-to-tracked-entity.yaml
-# is the half that does it; here the entity and its enrollment are parameters.
+# That is a real lookup against a real identifier crosswalk, and
+# fhir-patient-to-tracked-entity.yaml is the half that does it; here the entity and its enrollment are parameters.
 #
 #   dg run --local examples/fhir/fhir-encounter-to-event.yaml
 #   dg run --local examples/fhir/fhir-encounter-to-event.yaml -p encounter_id=137202491
@@ -121,7 +121,7 @@ params:
     tracked_entity:
       type: string
       description: The DHIS2 person the Encounter's Patient resolves to. A real crosswalk is
-        patient-to-tracked-entity.yaml.
+        fhir-patient-to-tracked-entity.yaml.
       default: coxwIkMqNBB
     enrollment_uid:
       type: string

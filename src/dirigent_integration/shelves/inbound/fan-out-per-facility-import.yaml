@@ -6,10 +6,9 @@
 #
 # WHY THE FAN CONVERGES AT THE IMPORT. Two reasons, and both are worth knowing:
 #
-#   for_each is expanded when the run is created, so it may read params, run and item but
-#   never another step's output: the cardinality has to exist before anything executes. A
-#   step fanned over "the facilities that answered" is therefore not expressible, and
-#   should not be -- it would make the shape of the run depend on the weather.
+#   A for_each may read another step's output, so a step fanned over "the facilities that
+#   answered" could be written. It should not be: it would make the shape of the run depend
+#   on the weather, and its grid would not exist until the pull had settled.
 #
 #   A data value set carries orgUnit per value, so one document can hold every facility at
 #   once. Fifteen imports of one facility each would be fifteen round trips, fifteen

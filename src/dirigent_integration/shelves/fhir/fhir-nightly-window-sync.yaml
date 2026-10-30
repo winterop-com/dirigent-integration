@@ -51,6 +51,12 @@
 # first page and reports whether there were more, which is the smallest thing that does not
 # quietly lie about completeness.
 #
+# WHERE THIS GOES NEXT. The sync exists to feed DHIS2, and the shelf's other documents are what
+# turn each of these types into an import: Patient through fhir-patient-to-tracked-entity.yaml,
+# Encounter through fhir-encounter-to-event.yaml, QuestionnaireResponse through
+# fhir-capture-bundle-to-data-values.yaml. This one only pulls, and its last step only asks the
+# instance they import into whether it answers.
+#
 # WHERE A READER CHANGES IT. `resource_types` is the fan-out and the whole scope of the sync;
 # `page_size` is what one page holds. Add a type to the list and the grid grows on the next
 # firing with nothing else edited.
@@ -83,17 +89,7 @@ requires:
     - transform.jq
 
 connections:
-  # Carried for its timeout and TLS setting; the searches below give absolute URLs, because a
-  # half-open range needs the same query parameter twice and the query map holds one per key.
-  fhir-source:
-    kind: http
-    config:
-      base_url: https://hapi.fhir.org/baseR4
-      timeout: 60s
-  # Not read by this document, which only pulls. It is here because the sync exists to feed
-  # DHIS2, and the shelf's other documents are what turn each of these types into an import:
-  # Patient through patient-to-tracked-entity.yaml, Encounter through encounter-to-event.yaml,
-  # QuestionnaireResponse through capture-bundle-to-data-values.yaml.
+  # The instance this sync feeds, read by the target step and written by nothing here.
   dhis2-demo:
     kind: dhis2
     config:
@@ -122,10 +118,9 @@ params:
       default: 50
 
 steps:
-  # for_each is expanded when the run is created, so it reads params, run and item -- never
-  # another step's output, because the cardinality of the grid has to be known before anything
-  # executes. That is why the types are a parameter and not something discovered from
-  # /metadata: a run's shape is fixed before its first request.
+  # for_each reads a parameter here, so the grid is written when the run is created. It could
+  # read a step's output, and discover the types from /metadata, but then the grid would not
+  # exist until that step settled. A parameter fixes the run's shape before its first request.
   pull:
     block: http.request
     for_each: "${params.resource_types}"
@@ -133,6 +128,7 @@ steps:
     config:
       url: "${params.fhir_base}/${item}?_lastUpdated=ge${run.window.start}&_lastUpdated=lt${run.window.end}&_count=${params.page_size}&_sort=_lastUpdated"
       method: GET
+      timeout: 60s
       headers:
         Accept: application/fhir+json
       # A type this server does not serve answers 404 or an OperationOutcome, and under
@@ -172,6 +168,17 @@ steps:
            # The gap between the two is what items: continue bought, and saying it out loud is
            # what keeps a partial sync from reading like a complete one.
            types_missed: ($asked - [$seen[] | .type])}
+
+  # One short read of the instance the types above are imported into. Tolerated, because a
+  # sleeping DHIS2 does not change what the FHIR server said.
+  target:
+    block: http.request
+    depends_on: [summarise]
+    continue_on_failure: true
+    config:
+      connection: dhis2-demo
+      path: /api/system/info
+      method: GET
 
 triggers:
   schedules:
