@@ -55,7 +55,7 @@
 # and a dotted one is one (dataElement, categoryOptionCombo) cell of it.
 #
 # WHERE A READER CHANGES IT. `questionnaire` names the form; on this facade that is a DHIS2
-# data set uid. Point `fhir_base` at your own `d2w fhir serve`, set `questionnaire_uid` to the
+# data set uid. Point the `fhir-facade` connection at your own `d2w fhir serve`, set `questionnaire_uid` to the
 # data set you generated a form from, repoint the `dhis2` connection, and turn `commit_dry_run`
 # off against an instance of your own.
 #
@@ -65,7 +65,7 @@
 # values rather than accompany them.
 #
 #   dg run --local examples/fhir/fhir-capture-bundle-to-data-values.yaml
-#   dg run --local examples/fhir/fhir-capture-bundle-to-data-values.yaml -p fhir_base=http://localhost:8096
+#   dg run --local examples/fhir/fhir-capture-bundle-to-data-values.yaml -p page_size=10
 #   dg run --local examples/fhir/fhir-capture-bundle-to-data-values.yaml -p commit_dry_run=false
 
 format: dirigent/v1
@@ -116,10 +116,6 @@ connections:
 params:
   type: object
   properties:
-    fhir_base:
-      type: string
-      description: The facade to read captures from.
-      default: http://localhost:8095
     questionnaire_uid:
       type: string
       description: The aggregate form, which on this facade is the DHIS2 data set uid.

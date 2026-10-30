@@ -1,14 +1,15 @@
 # One QuestionnaireResponse mapped onto data elements by a linkId lookup the document carries.
 #
-# THE FLOW, END TO END. Read one capture off the facade by its receipt id, translate its
-# answers into data values through an explicit linkId-to-data-element table held in params,
-# and import the result -- dry run first.
+# THE FLOW, END TO END. Take one capture, written inline, translate its answers into data
+# values through an explicit linkId-to-data-element table held in params, and rehearse the
+# import as a dry run. It writes nothing, here or on any instance, until the rehearse step's
+# dry_run is turned off.
 #
 # WHY A LOOKUP AT ALL. On a `d2w fhir serve` facade the linkIds already ARE DHIS2 uids, so
-# capture-bundle-to-data-values.yaml needs no table: it splits the dotted linkId and is done.
+# fhir-capture-bundle-to-data-values.yaml needs no table: it splits the dotted linkId and is done.
 # Every other FHIR server in the world uses linkIds a form designer chose -- "anc.visits.total",
 # "q3b", "weight_kg" -- and then the table IS the integration. This document is the general
-# case, and the facade is only where the example gets a real response to run against.
+# case, and the inline response stands in for what such a server sends.
 #
 # WHAT ARRIVES. One QuestionnaireResponse, answers keyed by whatever the form calls them:
 #
@@ -96,7 +97,7 @@ params:
 steps:
   # The capture, written inline so the document runs with nothing set up. In service it is the
   # body of an endpoint delivery (fhir-subscription-to-dhis2.yaml) or one entry of a
-  # searchset Bundle (capture-bundle-to-data-values.yaml); either way this step's output is
+  # searchset Bundle (fhir-capture-bundle-to-data-values.yaml); either way this step's output is
   # exactly one QuestionnaireResponse, and nothing downstream knows where it came from.
   receive:
     block: value.const

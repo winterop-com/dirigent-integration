@@ -9,11 +9,11 @@
 # WHY ONE TABLE AND NOT ONE FILE PER ORG UNIT. A value moves through step outputs, and a value
 # leaves a run through storage.write; a block does not write storage itself. A fan-out step
 # stores one output -- the list of its items' outputs, in item order, with a failed item absent
-# from it -- and `for_each` is expanded when the run is created, so it can read params, run and
-# item and never an upstream step's output. Item three of one step therefore cannot ask item
-# three of another what it produced: a second fan cannot pick up the export its twin made. So
-# the fan-in is a single step over every export, and the org unit is read out of each data
-# value where the join key can be seen, rather than out of a storage path that used to carry it.
+# from it. A second fan could adopt the export's grid with `for_each: ${steps.export.items}` and
+# write one file per org unit, which is what dhis2-export-per-org-unit.yaml in the dhis2 pack
+# does. A query over the whole extraction wants one table, so here the fan-in is a single step
+# over every export, and the org unit is read out of each data value where the join key can be
+# seen, rather than out of a storage path.
 #
 # What happens, hop by hop:
 #

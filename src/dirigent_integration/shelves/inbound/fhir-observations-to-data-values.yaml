@@ -18,9 +18,9 @@
 # The hops, and the shape at each one:
 #
 #   1. pull       -> a FHIR Bundle: {resourceType: "Bundle", entry: [{resource: {...}}]}
-#   2. flatten    -> one row per entry that has both a mapped LOINC code and a numeric
-#                    value; everything else is dropped, silently and on purpose
-#   3. aggregate  -> {dataValues: [...]}, one value per (element, period) pair, summed
+#   2. flatten    -> one row per entry that has both a mapped LOINC code and a time it
+#                    happened; everything else is dropped, silently and on purpose
+#   3. aggregate  -> {dataValues: [...]}, one value per (element, period) pair, counted
 #   4. gate       -> refused unless the ids and periods are DHIS2's own
 #   5. import     -> the instance's summary
 #
@@ -34,8 +34,8 @@
 # perfectly predictable in shape -- which is the half this example teaches. If a run finds
 # nothing mappable, the gate refuses an empty set rather than importing nothing quietly.
 #
-# What makes it yours: fhir_base_url pointed at your server, the lookup table, and the
-# org unit.
+# What makes it yours: the `fhir-server` connection pointed at your server, the lookup table,
+# and the org unit.
 #
 #   dg run --local examples/inbound/fhir-observations-to-data-values.yaml
 #   dg run --local examples/inbound/fhir-observations-to-data-values.yaml -p count=50

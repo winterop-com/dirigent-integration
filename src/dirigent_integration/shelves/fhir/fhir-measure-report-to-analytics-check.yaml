@@ -15,7 +15,8 @@
 # population, Denominator, Denominator exclusion, Numerator, Numerator exclusion) -- over a
 # Bundle of FHIR data, and a measure evaluation engine is what turns that scoring into an R4
 # MeasureReport. The report is then a resource like any other, so this document fetches it
-# from wherever it was published. `fhir_base` defaults to a public HAPI R4 sandbox.
+# from wherever it was published. The `fhir-reports` connection points at a public HAPI R4
+# sandbox by default.
 #
 # WHAT ARRIVES -- the report. A proportion measure scored over a period:
 #
@@ -40,12 +41,15 @@
 # checked and they agree" is a fact worth delivering too:
 #
 #   {"measure": "...", "period": "202608", "org_unit": "ImspTQPwCqd",
-#    "fhir_score": 0.75, "dhis2_value": 0.71, "difference": 0.04, "discrepant": true}
+#    "report_period": {"start": "2026-08-01", "end": "2026-08-31"},
+#    "fhir_score": 0.75, "dhis2_value": 0.71, "difference": 0.04, "verdict": "discrepant"}
 #
 # WHICH CODES LINE UP WITH WHAT. `measure_url` and `indicator` are the two halves of one claim
 # -- that this FHIR measure and this DHIS2 data element or indicator count the same thing --
-# and a reader changes both together or neither. `period` is a DHIS2 ISO period; the FHIR side
-# carries a date range, so the two are matched on the range the period covers.
+# and a reader changes both together or neither. `period` and `report_period` are the same
+# stretch of time in two vocabularies, and they change together too: `period` is a DHIS2 ISO
+# period, and `report_period` a FHIR date, whose search matches a report inside that range. The
+# record carries the range the report named, so a reader can see what was compared.
 #
 # WHEN IT FINDS NOTHING. A missing report and an empty grid are ordinary answers, not failures:
 # the diff says `unavailable` and the receiver hears about it. A reconciliation that crashed
@@ -61,8 +65,8 @@ name: MeasureReport against DHIS2 analytics
 description: |
   Compare a FHIR measure report with DHIS2 analytics and report the difference.
 
-  The newest FHIR `MeasureReport` for the measure is held against the DHIS2 analytics value for
-  one period and org unit, and the gap is delivered.
+  The newest FHIR `MeasureReport` for the measure and period is held against the DHIS2 analytics
+  value for that period and one org unit, and the gap is delivered.
 
   A reconciliation, so it writes nothing: safe on a schedule. The report is produced by
   scoring a CQL measure over FHIR data -- `d2w fhir serve` publishes no `Measure` or
@@ -116,8 +120,12 @@ params:
       default: ImspTQPwCqd
     period:
       type: string
-      description: A DHIS2 ISO period; the FHIR side is matched on the range it covers.
+      description: The DHIS2 ISO period analytics is asked for.
       default: "202608"
+    report_period:
+      type: string
+      description: The same period as a FHIR date, which the report search matches within.
+      default: "2026-08"
     tolerance:
       type: number
       description: How far apart the two may be before the difference is called a discrepancy.
@@ -135,6 +143,7 @@ steps:
       method: GET
       query:
         measure: "${params.measure_url}"
+        period: "${params.report_period}"
         _sort: "-date"
         _count: 1
       headers:
@@ -183,6 +192,7 @@ steps:
         | {measure: $measure,
            period: $period,
            org_unit: $org_unit,
+           report_period: $report.period,
            fhir_score: $score,
            dhis2_value: $value,
            populations: [(($report.group[0].population // [])[])

@@ -21,7 +21,8 @@
 # WHAT LEAVES. A transaction Bundle, one entry per data value:
 #
 #   {"resourceType": "Bundle", "type": "transaction",
-#    "entry": [{"request": {"method": "POST", "url": "Observation"},
+#    "entry": [{"request": {"method": "PUT",
+#                           "url": "Observation?identifier=http://dhis2.org/fhir/id/data-value|s46m5MS0hxu.Prlt0C1RF0s-202608-vSbt6cezomG"},
 #               "resource": {
 #                 "resourceType": "Observation", "status": "final",
 #                 "identifier": [{"system": "http://dhis2.org/fhir/id/data-value",
