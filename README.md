@@ -137,7 +137,7 @@ vocabulary the shelf is built on -- subject, capture, ConceptMap.
 
 - **`examples/fhir/fhir-capture-bundle-to-data-values.yaml`** -- the capture pair end to end: a page
   of captures pulled off the facade, translated, gated on the pack's own id and period formats,
-  rehearsed and imported.
+  rehearsed and imported, the import a dry run too until `commit_dry_run` is false.
 - **`examples/fhir/fhir-questionnaire-response-to-data-values.yaml`** -- the general case, where a
   `linkId` is a form designer's name and the lookup is the integration.
 - **`examples/fhir/fhir-patient-to-tracked-entity.yaml`** -- the `Patient` register folded into an
