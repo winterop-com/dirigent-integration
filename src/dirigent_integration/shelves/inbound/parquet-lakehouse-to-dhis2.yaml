@@ -41,8 +41,11 @@ kind: pipeline
 code: parquet-lakehouse-to-dhis2
 name: A lakehouse table into DHIS2
 description: |
-  Read a parquet export of encounter-grain rows, aggregate it to DHIS2's grain, import it,
-  and wait for the month to be signed off.
+  Sum a parquet export down to DHIS2 figures, import them, and await sign-off.
+
+  The parquet export holds encounter-grain rows, which are aggregated to DHIS2's grain before the
+  import, and the run then waits for the month to be signed off. `dry_run` defaults to true, so a
+  first run writes nothing.
 
 tags: [inbound, dhis2, parquet, storage, transform, cross-boundary]
 

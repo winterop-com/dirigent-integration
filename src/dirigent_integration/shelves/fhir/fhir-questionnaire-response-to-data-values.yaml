@@ -38,8 +38,10 @@ kind: pipeline
 code: fhir-questionnaire-response-to-data-values
 name: QuestionnaireResponse through a linkId table
 description: |
-  Map one `QuestionnaireResponse` onto DHIS2 data values through an explicit linkId lookup,
-  for the general case where a form's `linkId` is a designer's name rather than a DHIS2 uid.
+  Map one FHIR form response onto DHIS2 data values using a lookup table.
+
+  The `QuestionnaireResponse` goes through an explicit linkId lookup, for the general case where
+  a form's `linkId` is a designer's name rather than a DHIS2 uid. The import is a dry run.
 
   A linkId the table does not name is dropped and counted, never guessed at.
 

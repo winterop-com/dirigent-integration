@@ -34,8 +34,10 @@ kind: pipeline
 code: http-json-to-data-values
 name: A public JSON API into DHIS2
 description: |
-  Pull a public JSON feed, reshape it into a DHIS2 data value set, gate it on DHIS2's own
-  id and period formats, and hand it to `dhis2.data_value_set_import` as a dry run.
+  Pull a public JSON feed and rehearse importing it into DHIS2.
+
+  The feed is reshaped into a DHIS2 data value set, gated on DHIS2's own id and period formats,
+  and handed to `dhis2.data_value_set_import` as a dry run.
 
 tags: [inbound, dhis2, http, transform, validate, cross-boundary]
 

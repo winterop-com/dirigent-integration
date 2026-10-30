@@ -5,6 +5,7 @@ pack loads together into one catalog with no collisions, and that a pipeline spa
 validates against that whole.
 """
 
+import re
 from pathlib import Path
 
 import pytest
@@ -97,6 +98,18 @@ def test_a_cross_boundary_example_opens_with_a_comment_and_is_a_v1_pipeline(path
     assert definition["kind"] == "pipeline"
     assert definition["code"] == path.stem, "a document's code should match its file name"
     assert definition["description"], "every example says what it is for"
+
+
+#: The most a description's first sentence may run to, which is what a list row has room for.
+FIRST_SENTENCE_AT_MOST = 80
+
+
+@pytest.mark.parametrize("path", CROSS_BOUNDARY, ids=[str(p.relative_to(INTEGRATION_EXAMPLES)) for p in CROSS_BOUNDARY])
+def test_a_cross_boundary_example_opens_with_a_short_plain_sentence(path: Path) -> None:
+    paragraph = " ".join(str(yaml.safe_load(path.read_text())["description"]).strip().split("\n\n", 1)[0].split())
+    sentence = re.split(r"(?<=[.!?])\s", paragraph, maxsplit=1)[0]
+    assert len(sentence) <= FIRST_SENTENCE_AT_MOST, sentence
+    assert "`" not in sentence, sentence
 
 
 @pytest.mark.parametrize("path", CROSS_BOUNDARY, ids=[str(p.relative_to(INTEGRATION_EXAMPLES)) for p in CROSS_BOUNDARY])

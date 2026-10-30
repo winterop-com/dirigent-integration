@@ -47,9 +47,12 @@ kind: pipeline
 code: outside-to-dhis2-with-checks
 name: An inbound pipeline with every guard
 description: |
+  Import outside data into DHIS2 with a safety check at every stage.
+
   A readiness sensor, a schema on what arrived, a schema on what was built, a rehearsed
   import, the real import behind it, and the completeness sensor -- each guard buying off a
-  different failure.
+  different failure. `commit_dry_run` defaults to true, so the second import is a rehearsal too
+  until it is set to false.
 
 tags: [inbound, dhis2, http, sensor, transform, validate, cross-boundary]
 

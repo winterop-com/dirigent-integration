@@ -21,7 +21,10 @@ format: dirigent/v1
 kind: pipeline
 code: dhis2-values-to-parquet
 name: Export a data value set as parquet
-description: Read a DHIS2 data value set into object storage, then re-encode it as parquet beside it.
+description: |
+  Save a DHIS2 data value set to object storage and convert it to parquet.
+
+  The parquet file is written beside the stored data value set.
 
 tags: [dhis2, parquet, s3, cross-boundary]
 

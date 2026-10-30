@@ -59,8 +59,10 @@ kind: pipeline
 code: fhir-measure-report-to-analytics-check
 name: MeasureReport against DHIS2 analytics
 description: |
-  Hold a FHIR `MeasureReport` against the DHIS2 analytics value for the same period and org
-  unit, and deliver the gap.
+  Compare a FHIR measure report with DHIS2 analytics and report the difference.
+
+  The newest FHIR `MeasureReport` for the measure is held against the DHIS2 analytics value for
+  one period and org unit, and the gap is delivered.
 
   A reconciliation, so it writes nothing: safe on a schedule. The report is produced by
   scoring a CQL measure over FHIR data -- `d2w fhir serve` publishes no `Measure` or

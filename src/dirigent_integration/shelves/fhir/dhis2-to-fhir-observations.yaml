@@ -61,8 +61,10 @@ kind: pipeline
 code: dhis2-to-fhir-observations
 name: DHIS2 data values to FHIR Observations
 description: |
-  Export a DHIS2 data value set and publish it as a transaction `Bundle` of `Observation`
-  resources on a FHIR server.
+  Publish DHIS2 data values to a FHIR server as a bundle of Observations.
+
+  A DHIS2 data value set is exported and published as a transaction `Bundle` of `Observation`
+  resources.
 
   The outbound half of this shelf. Each entry is a conditional update keyed on the aggregate
   cell's natural key -- `(dataElement.categoryOptionCombo, period, orgUnit)` -- so publishing

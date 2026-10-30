@@ -24,7 +24,7 @@ format: dirigent/v1
 kind: pipeline
 code: dhis2-export-to-s3
 name: Export a data value set to S3
-description: Read a DHIS2 data value set, write it into object storage, then archive a dated copy.
+description: Export a DHIS2 data value set to object storage and archive a dated copy.
 
 tags: [dhis2, s3, cross-boundary]
 
