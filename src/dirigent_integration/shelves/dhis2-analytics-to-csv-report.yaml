@@ -38,7 +38,10 @@ format: dirigent/v1
 kind: pipeline
 code: dhis2-analytics-to-csv-report
 name: An analytics grid as a csv report
-description: Query DHIS2 analytics, flatten the grid into rows, write a csv to S3, and announce it.
+description: |
+  Turn a DHIS2 analytics query into a csv report in S3 and announce it.
+
+  The analytics grid is flattened into rows before the csv is written.
 
 tags: [dhis2, s3, csv, cross-boundary]
 

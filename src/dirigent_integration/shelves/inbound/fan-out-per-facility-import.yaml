@@ -50,8 +50,11 @@ kind: pipeline
 code: fan-out-per-facility-import
 name: A facility fan-out into one district import
 description: |
-  Pull one facility at a time, tolerate the ones that are down, import what answered as a
-  single data value set, and post a reconciliation of asked-for against imported.
+  Collect from each facility, import what answered, and report who did not.
+
+  There is one pull per facility, tolerating the ones that are down. What answered is imported as
+  a single data value set, and a reconciliation of asked-for against imported is posted. `dry_run`
+  defaults to true, so a first run writes nothing.
 
 tags: [inbound, dhis2, http, graph, transform, cross-boundary]
 

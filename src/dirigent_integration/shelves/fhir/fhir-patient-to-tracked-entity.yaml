@@ -69,8 +69,10 @@ kind: pipeline
 code: fhir-patient-to-tracked-entity
 name: FHIR Patient to a DHIS2 tracked entity
 description: |
-  Search the facade's `Patient` register and build the `/api/tracker` payload for one tracked
-  entity and its enrollment, posted with `importMode=VALIDATE`.
+  Turn a FHIR Patient into a DHIS2 tracked entity and enrollment, as a dry run.
+
+  The run searches the facade's `Patient` register and builds the `/api/tracker` payload for one
+  tracked entity and its enrollment, posted with `importMode=VALIDATE`.
 
   `dhis2.tracker` reads and does not write, so the write is an ordinary `http.request` on the
   `dhis2` connection -- which works because the HTTP blocks read `base_url` and the basic

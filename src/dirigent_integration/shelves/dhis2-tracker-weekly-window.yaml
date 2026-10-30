@@ -46,7 +46,7 @@ format: dirigent/v1
 kind: pipeline
 code: dhis2-tracker-weekly-window
 name: A week of tracker events, as parquet
-description: Read the tracker events of the week that just closed and archive them as parquet.
+description: Archive the tracker events of the week that just closed as parquet.
 
 tags: [dhis2, parquet, s3, schedule, cross-boundary]
 

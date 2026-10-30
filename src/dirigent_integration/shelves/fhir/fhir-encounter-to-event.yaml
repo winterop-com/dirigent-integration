@@ -65,7 +65,9 @@ kind: pipeline
 code: fhir-encounter-to-event
 name: Encounter and Observations to one event
 description: |
-  Fold one FHIR `Encounter` and every `Observation` naming it into a single DHIS2 tracker
+  Turn one FHIR visit and its measurements into one DHIS2 event, as a dry run.
+
+  One FHIR `Encounter` and every `Observation` naming it are folded into a single DHIS2 tracker
   event, posted with `importMode=VALIDATE`.
 
   The cardinalities do not line up: FHIR spreads a visit over an Encounter plus one

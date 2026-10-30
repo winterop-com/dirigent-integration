@@ -39,8 +39,11 @@ kind: pipeline
 code: csv-drop-to-data-values
 name: A csv drop into DHIS2
 description: |
-  Wait for a csv to land in object storage, decode it, translate the sender's codes into
-  DHIS2 uids, drop the rows that carry no measurement, and import what is left.
+  Wait for a csv in object storage and import its rows into DHIS2.
+
+  The csv is decoded, the sender's codes are translated into DHIS2 uids, the rows that carry no
+  measurement are dropped, and what is left is imported. `dry_run` defaults to true, so a first
+  run writes nothing.
 
 tags: [inbound, dhis2, storage, transform, cross-boundary]
 

@@ -94,8 +94,11 @@ kind: pipeline
 code: fhir-subscription-to-dhis2
 name: A FHIR Subscription notification imported
 description: |
-  Take a FHIR `Subscription` rest-hook notification on an endpoint source, translate the
-  notified `QuestionnaireResponse` into a DHIS2 data value set, and rehearse the import.
+  Receive a FHIR notification and rehearse importing it into DHIS2.
+
+  A FHIR `Subscription` rest-hook notification arrives on an endpoint source, and the notified
+  `QuestionnaireResponse` is translated into a DHIS2 data value set before the import is
+  rehearsed.
 
   The subscription contract is three fields: `criteria` (a search string), `channel.type`
   (`rest-hook` is an HTTP POST), and `channel.endpoint` (the source's route). The server

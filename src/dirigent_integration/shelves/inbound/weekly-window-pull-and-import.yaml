@@ -42,9 +42,11 @@ kind: pipeline
 code: weekly-window-pull-and-import
 name: A weekly windowed pull into DHIS2
 description: |
-  A Monday schedule whose runs pull the week that just closed -- `${run.window.start}` up
-  to but not including `${run.window.end}` -- reshape it into a data value set, import it,
-  and wait for the week to be signed off.
+  Pull last week's data every Monday, import it into DHIS2, and await sign-off.
+
+  A Monday schedule's runs pull the week that just closed -- `${run.window.start}` up to but not
+  including `${run.window.end}` -- reshape it into a data value set, import it, and wait for the
+  week to be signed off. `dry_run` defaults to true, so a first run writes nothing.
 
 tags: [inbound, dhis2, http, schedule, transform, cross-boundary]
 

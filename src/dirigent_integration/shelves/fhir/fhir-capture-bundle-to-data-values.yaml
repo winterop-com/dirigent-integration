@@ -70,8 +70,10 @@ kind: pipeline
 code: fhir-capture-bundle-to-data-values
 name: FHIR captures to DHIS2 data values
 description: |
-  Read a page of `QuestionnaireResponse` captures off a `d2w fhir serve` facade and import
-  them into DHIS2 as aggregate data values, rehearsing the import first.
+  Import the first completed FHIR form response on a page into DHIS2.
+
+  A page of `QuestionnaireResponse` captures is read off a `d2w fhir serve` facade. The first
+  completed one becomes aggregate data values, and the import is rehearsed first.
 
   The capture pair is the vocabulary: a `Questionnaire` is the form definition generated from
   DHIS2 metadata, and a `QuestionnaireResponse` is one submission against it. Every `linkId`

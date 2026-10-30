@@ -58,8 +58,11 @@ kind: pipeline
 code: endpoint-payload-to-tracker-event
 name: A pushed encounter into DHIS2
 description: |
+  Take an encounter posted by an outside system and import it into DHIS2.
+
   An outside system POSTs one captured encounter to an endpoint source; a jq step picks the
-  named fields, and the run reshapes them into a DHIS2 data value set and imports it.
+  named fields, and the run reshapes them into a DHIS2 data value set and imports it. `dry_run`
+  defaults to true, so a first run writes nothing.
 
   The pack's `dhis2.tracker` block reads `/api/tracker` and does not write it, so an
   event-shaped capture lands as the aggregate figures it contributes to.

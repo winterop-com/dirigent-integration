@@ -65,8 +65,11 @@ kind: pipeline
 code: fhir-nightly-window-sync
 name: Nightly windowed FHIR sync
 description: |
-  Pull everything a FHIR server changed inside the interval a nightly schedule just closed,
-  one fan-out item per resource type, and join the results into one summary.
+  Pull last night's changes from a FHIR server, type by type, into one summary.
+
+  Each run reads what changed inside the interval the nightly schedule just closed, with one
+  fan-out item per resource type, and joins the results. Only the first page of each type is
+  read, and the summary says whether more were left.
 
   The window belongs to the run, not to this document: `${run.window.start}` and
   `${run.window.end}` are half-open ISO instants, so consecutive firings tile the timeline

@@ -45,8 +45,11 @@ kind: pipeline
 code: fhir-observations-to-data-values
 name: FHIR Observations into DHIS2
 description: |
-  Pull a FHIR Observation bundle, map LOINC codes onto DHIS2 data elements, reduce the
-  observations to monthly counts, and import them as a data value set.
+  Count FHIR Observations by month and import the counts into DHIS2.
+
+  A FHIR Observation bundle is pulled, LOINC codes are mapped onto DHIS2 data elements, and the
+  monthly counts are imported as a data value set. `dry_run` defaults to true, so a first run
+  writes nothing.
 
 tags: [inbound, dhis2, http, transform, validate, cross-boundary]
 

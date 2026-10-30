@@ -60,8 +60,11 @@ kind: pipeline
 code: fhir-conceptmap-driven-mapping
 name: A ConceptMap drives the mapping
 description: |
-  Fetch a `ConceptMap` from the FHIR server, flatten it into a lookup, and translate a
-  capture's coded answers through it -- so no code appears in this document at all.
+  Fetch a code mapping from a FHIR server and use it to translate form answers.
+
+  A `ConceptMap` is flattened into a lookup and a capture's coded answers are translated through
+  it, so the mapping itself is not written in this document. The translated set goes to DHIS2 as
+  a dry run.
 
   A `d2w fhir serve` option-set map carries two groups distinguished by `group.target`: one to
   the DHIS2 option uid (always complete) and one to the DHIS2 option code (only where the

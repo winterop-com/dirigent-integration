@@ -51,7 +51,11 @@ format: dirigent/v1
 kind: pipeline
 code: dhis2-values-per-org-unit-to-parquet
 name: A parquet table over a batch of org units
-description: Export a data value set per organisation unit, flatten the batch into one parquet table, and manifest what landed.
+description: |
+  Export DHIS2 values per org unit into one parquet table, with a manifest.
+
+  Each organisation unit gets its own data value set export, the batch is flattened into one
+  table, and the manifest says what landed.
 
 tags: [dhis2, parquet, s3, cross-boundary]
 
