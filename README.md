@@ -195,7 +195,7 @@ export GITHUB_TOKEN=$(gh auth token)   # only if a component repository is priva
 ### Running the stack
 
 ```sh
-cp .env.example .env      # set DIRIGENT_SECRET_KEY and DIRIGENT_BOOTSTRAP_ADMIN_PASSWORD
+cp .env.example .env      # set DIRIGENT_SECRET_KEY, DIRIGENT_BOOTSTRAP_ADMIN_PASSWORD and POSTGRES_PASSWORD
 make up
 ```
 
