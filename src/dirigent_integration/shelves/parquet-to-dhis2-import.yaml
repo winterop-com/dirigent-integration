@@ -41,7 +41,7 @@
 # (storage_connections: {s3: <code>}).
 #
 #   dg run --local examples/parquet-to-dhis2-import.yaml
-#   dg run --local examples/parquet-to-dhis2-import.yaml -p dry_run=false
+#   dg run --local examples/parquet-to-dhis2-import.yaml -p dry_run=false   # against your own instance
 
 format: dirigent/v1
 kind: pipeline
