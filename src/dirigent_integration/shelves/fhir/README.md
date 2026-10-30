@@ -53,7 +53,7 @@ option set is in the regenerated map, and the pipeline that reads it needs no ed
 
 | File | What it teaches |
 | --- | --- |
-| [fhir-capture-bundle-to-data-values.yaml](fhir-capture-bundle-to-data-values.yaml) | The capture pair end to end: a page of `QuestionnaireResponse` captures pulled off the facade, translated to `/api/dataValueSets`, gated on the pack's `dhis2-uid` and `dhis2-period` formats, rehearsed and then imported. |
+| [fhir-capture-bundle-to-data-values.yaml](fhir-capture-bundle-to-data-values.yaml) | The capture pair end to end: a page of `QuestionnaireResponse` captures pulled off the facade, translated to `/api/dataValueSets`, gated on the pack's `dhis2-uid` and `dhis2-period` formats, rehearsed and then imported, the import a dry run too until `commit_dry_run` is false. |
 | [fhir-questionnaire-response-to-data-values.yaml](fhir-questionnaire-response-to-data-values.yaml) | The general case, where a `linkId` is a form designer's name rather than a DHIS2 uid: an explicit lookup in params, and every unmapped answer counted rather than dropped in silence. |
 | [fhir-patient-to-tracked-entity.yaml](fhir-patient-to-tracked-entity.yaml) | The `Patient` register searched by identifier and folded into an `/api/tracker` registration -- and why the write is an `http.request` on the `dhis2` connection, because `dhis2.tracker` reads and does not write. |
 | [fhir-encounter-to-event.yaml](fhir-encounter-to-event.yaml) | Cardinalities that do not line up: one `Encounter` plus every `Observation` naming it, folded into the single program stage event DHIS2 wants, with the LOINC codes mapped and the rest reported. |

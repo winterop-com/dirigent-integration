@@ -3,7 +3,8 @@
 # THE FLOW, END TO END. `d2w fhir serve` publishes one DHIS2 instance as a FHIR endpoint and
 # takes captures back. This document reads the captures it is holding for one aggregate form,
 # turns them into DHIS2's own `/api/dataValueSets` envelope, gates that envelope on DHIS2's id
-# and period formats, rehearses the import as a dry run, and only then writes it.
+# and period formats, rehearses the import as a dry run, and only then sends it for real -- which
+# is a dry run too until `commit_dry_run` is set to false, because the demo is shared.
 #
 # THE CAPTURE PAIR. The facade's whole capture surface is two resource types, and the pair is
 # the thing to learn:
@@ -55,7 +56,8 @@
 #
 # WHERE A READER CHANGES IT. `questionnaire` names the form; on this facade that is a DHIS2
 # data set uid. Point `fhir_base` at your own `d2w fhir serve`, set `questionnaire_uid` to the
-# data set you generated a form from, and repoint the `dhis2` connection.
+# data set you generated a form from, repoint the `dhis2` connection, and turn `commit_dry_run`
+# off against an instance of your own.
 #
 # WHAT THIS DOES NOT DO. It does not invent values for unanswered items -- an absent answer and
 # a zero are different facts -- and it does not register completeness. Completeness is a second
@@ -64,6 +66,7 @@
 #
 #   dg run --local examples/fhir/fhir-capture-bundle-to-data-values.yaml
 #   dg run --local examples/fhir/fhir-capture-bundle-to-data-values.yaml -p fhir_base=http://localhost:8096
+#   dg run --local examples/fhir/fhir-capture-bundle-to-data-values.yaml -p commit_dry_run=false
 
 format: dirigent/v1
 kind: pipeline
@@ -74,6 +77,8 @@ description: |
 
   A page of `QuestionnaireResponse` captures is read off a `d2w fhir serve` facade. The first
   completed one becomes aggregate data values, and the import is rehearsed first.
+  `commit_dry_run` defaults to true, so the second import is a rehearsal too until it is set to
+  false against an instance of your own.
 
   The capture pair is the vocabulary: a `Questionnaire` is the form definition generated from
   DHIS2 metadata, and a `QuestionnaireResponse` is one submission against it. Every `linkId`
@@ -97,8 +102,9 @@ connections:
     config:
       base_url: http://localhost:8095
       timeout: 30s
-  # The instance the values land in. This is the demo, which is for reading: the import below
-  # is a dry run against it, and repointing this connection is what makes the real one real.
+  # The instance the values land in. This is the demo, which is for reading: both imports below
+  # are dry runs against it, and repointing this connection and setting commit_dry_run to false
+  # is what makes the real one real.
   dhis2-demo:
     kind: dhis2
     config:
@@ -122,6 +128,10 @@ params:
       type: integer
       description: How many captures one page holds; the facade caps this at 500.
       default: 50
+    commit_dry_run:
+      type: boolean
+      description: Whether the second import is still a rehearsal. False makes it real.
+      default: true
 
 schemas:
   # The gate is the pack's own formats, not a shape check: dhis2-uid refuses anything that is
@@ -221,12 +231,13 @@ steps:
 
   # Second, and only because the rehearsal passed. The default all_success edge is what
   # enforces that: a refused rehearsal leaves this skipped rather than writing anyway.
+  # commit_dry_run keeps this a rehearsal as well, so the shared demo is never written to.
   import:
     block: dhis2.data_value_set_import
     depends_on: [rehearse]
     config:
       connection: dhis2-demo
       data_values: "${steps.gate.output.value}"
-      dry_run: false
+      dry_run: "${params.commit_dry_run}"
       import_strategy: CREATE_AND_UPDATE
       atomic_mode: ALL
