@@ -42,7 +42,7 @@ clone: sync
 dev: sync ui
 	DIRIGENT_UI_DIR=$(UI_DIST) $(UV) run dg dev --wipe-state --host $(DEV_HOST) --port $(DEV_PORT)
 
-# Boot an instance holding every component's example corpus, schedules paused. Every corpus
+# Boot an instance holding every component's example corpus, schedules and self-starting sources paused. Every corpus
 # is installed -- dirigent's own, each pack's, and this repository's -- and each ships through
 # the examples() hook, so --seed-installed reaches all of them with no path named here. The
 # secret key is minted per boot: the state is wiped first, so no connection an older key
