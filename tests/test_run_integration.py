@@ -22,6 +22,13 @@ def test_the_manifest_runs_contrib_without_its_live_tests_and_reads_both_shelves
     ]
 
 
+def test_the_manifest_runs_fhir_without_its_live_tests_and_reads_its_shelves():
+    fhir = next(pack for pack in packs() if pack.name == "dirigent-fhir")
+    assert fhir.repo == "https://github.com/winterop-com/dirigent-fhir"
+    assert fhir.pytest_args == ["-m", "not live"]
+    assert fhir.examples == [CHECKOUTS / "dirigent-fhir" / "src" / "dirigent_fhir" / "shelves"]
+
+
 def test_a_present_distribution_is_skipped_whatever_its_prefix():
     dev = ["dhis2w-client>=1.14", "dirigent-testing==0.21.0", "httpx2>=0.1", "pytest>=8"]
     present = {"dhis2w-client", "dirigent-testing", "httpx2", "pytest"}
