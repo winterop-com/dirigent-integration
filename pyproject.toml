@@ -76,6 +76,7 @@ dirigent-plugin = { git = "https://github.com/winterop-com/dirigent", subdirecto
 dirigent-common = { git = "https://github.com/winterop-com/dirigent", subdirectory = "packages/dirigent-common", branch = "main" }
 dirigent-client = { git = "https://github.com/winterop-com/dirigent", subdirectory = "packages/dirigent-client", branch = "main" }
 dirigent-examples = { git = "https://github.com/winterop-com/dirigent", subdirectory = "packages/dirigent-examples", branch = "main" }
+dirigent-mcp = { git = "https://github.com/winterop-com/dirigent", subdirectory = "packages/dirigent-mcp", branch = "main" }
 dirigent-testing = { git = "https://github.com/winterop-com/dirigent", subdirectory = "packages/dirigent-testing", branch = "main" }
 dirigent-dhis2 = { git = "https://github.com/winterop-com/dirigent-dhis2", branch = "main" }
 dirigent-contrib = { git = "https://github.com/winterop-com/dirigent-contrib", branch = "main" }
