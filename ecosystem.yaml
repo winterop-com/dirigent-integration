@@ -33,4 +33,15 @@ components:
       - src/dirigent_contrib/chap/shelves
       - src/dirigent_contrib/climate/shelves
 
+  dirigent-fhir:
+    repo: https://github.com/winterop-com/dirigent-fhir
+    ref: main
+    # The FHIR pack: the fhir connection kind and the REST blocks for one FHIR R4 server. Cloned
+    # so its own tests and examples run here. The tests marked `live` reach a real FHIR server
+    # and are left out; the examples are validated, never run.
+    role: pack
+    pytest_args: ["-m", "not live"]
+    examples:
+      - src/dirigent_fhir/shelves
+
   # Future official packs are listed here the same way, each cloned and self-tested.

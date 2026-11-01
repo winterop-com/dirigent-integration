@@ -56,13 +56,20 @@ EXPECTED_BLOCKS = {
         "climate.job.run",
         "climate.sync",
     ],
+    "fhir": [
+        "fhir.create",
+        "fhir.read",
+        "fhir.search",
+        "fhir.transaction",
+        "fhir.update",
+    ],
 }
 
 #: A storage scheme and a connection kind each pack contributes beyond blocks. The file://
 #: scheme is a core built-in, registered when storage is built rather than contributed to the
 #: catalog, so the only contributed scheme in the merged catalog is s3.
 EXPECTED_STORAGE_SCHEMES = ["s3"]
-EXPECTED_CONNECTION_KINDS = ["chap", "climate", "dhis2", "s3"]
+EXPECTED_CONNECTION_KINDS = ["chap", "climate", "dhis2", "fhir", "s3"]
 
 CROSS_BOUNDARY = sorted(INTEGRATION_EXAMPLES.rglob("*.yaml"))
 

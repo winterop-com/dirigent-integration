@@ -39,6 +39,7 @@ assembly = [
     "dirigent-examples",
     "dirigent-dhis2",
     "dirigent-contrib",
+    "dirigent-fhir",
 ]
 dev = [
     "dirigent-testing",
@@ -52,7 +53,7 @@ dev = [
 
 # All component packages ride their tracked branch, unpinned: the integration always assembles
 # the latest ecosystem. The dirigent runtime packages come from the monorepo by subdirectory;
-# dirigent-dhis2 and dirigent-contrib come from their own repositories.
+# dirigent-dhis2, dirigent-contrib and dirigent-fhir come from their own repositories.
 [tool.uv]
 default-groups = ["dev", "assembly"]
 
@@ -78,6 +79,7 @@ dirigent-examples = { git = "https://github.com/winterop-com/dirigent", subdirec
 dirigent-testing = { git = "https://github.com/winterop-com/dirigent", subdirectory = "packages/dirigent-testing", branch = "main" }
 dirigent-dhis2 = { git = "https://github.com/winterop-com/dirigent-dhis2", branch = "main" }
 dirigent-contrib = { git = "https://github.com/winterop-com/dirigent-contrib", branch = "main" }
+dirigent-fhir = { git = "https://github.com/winterop-com/dirigent-fhir", branch = "main" }
 
 # The control center is itself a distribution: it registers one plugin whose only
 # contribution is the cross-boundary shelves the module carries.

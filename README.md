@@ -22,11 +22,12 @@ runnable at all.
 - **`ecosystem.yaml`** -- the manifest: every component and the ref it tracks, the source of
   truth for what gets assembled. `dirigent` (the runtime monorepo) is `role: runtime`,
   installed as dependencies and never cloned; each adapter is `role: pack`, cloned and
-  self-tested here. `dirigent-dhis2` and `dirigent-contrib` (Chap and the open climate
-  service) are the two today; a future pack becomes real with a single entry. A pack entry may
-  name `pytest_args` for its suite and `examples` for its example directories: contrib's suite
-  runs with `-m "not live"`, leaving out the tests that reach a real Chap or climate service,
-  and its two shelves under `src/dirigent_contrib/` are validated, never run.
+  self-tested here. `dirigent-dhis2`, `dirigent-contrib` (Chap and the open climate service)
+  and `dirigent-fhir` (one FHIR R4 server) are the three today; a future pack becomes real with
+  a single entry. A pack entry may name `pytest_args` for its suite and `examples` for its
+  example directories: contrib's and fhir's suites run with `-m "not live"`, leaving out the
+  tests that reach a real Chap, climate service or FHIR server, and their shelves under `src/`
+  are validated, never run.
 - **`pyproject.toml`** -- the assembled runtime: every dirigent runtime package plus every
   pack, wired through `[tool.uv.sources]` as git dependencies on `branch = main`, unpinned, so
   the integration always assembles the latest ecosystem.
