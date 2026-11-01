@@ -86,12 +86,25 @@ REHEARSAL_TIMEOUT_SECONDS = 300
 class Component:
     """One cloned component: where its repository lives and what it contributes to run here."""
 
-    def __init__(self, name: str, repo: str, ref: str) -> None:
-        """Bind a pack's name to its repository, its tracked ref, and its checkout path."""
+    def __init__(
+        self,
+        name: str,
+        repo: str,
+        ref: str,
+        pytest_args: list[str] | None = None,
+        examples: list[str] | None = None,
+    ) -> None:
+        """Bind a pack's name to its repository, its tracked ref, its checkout path, and how it runs here.
+
+        `pytest_args` is added to the pack's pytest command line, and `examples` names the
+        example directories relative to the checkout, `examples` when the manifest names none.
+        """
         self.name = name
         self.repo = repo
         self.ref = ref
         self.path = CHECKOUTS / name
+        self.pytest_args = list(pytest_args or [])
+        self.example_dirs = list(examples or ["examples"])
 
     @property
     def tests(self) -> Path:
@@ -99,16 +112,16 @@ class Component:
         return self.path / "tests"
 
     @property
-    def examples(self) -> Path:
-        """The pack's own examples directory inside its checkout."""
-        return self.path / "examples"
+    def examples(self) -> list[Path]:
+        """The pack's own example directories inside its checkout."""
+        return [self.path / directory for directory in self.example_dirs]
 
 
 def components(role: str) -> list[Component]:
     """Read the manifest and return the components in one role, in the order it names them."""
     manifest = yaml.safe_load(MANIFEST.read_text())
     return [
-        Component(name, entry["repo"], entry["ref"])
+        Component(name, entry["repo"], entry["ref"], entry.get("pytest_args"), entry.get("examples"))
         for name, entry in manifest["components"].items()
         if entry.get("role") == role
     ]
@@ -204,6 +217,7 @@ def run_pack_tests(pack: Component) -> bool:
     argv = ["pytest", str(pack.tests)]
     if config.exists():
         argv += ["-c", str(config)]
+    argv += pack.pytest_args
     print(f"\n=== pytest: {pack.name} ===")
     return subprocess.run([sys.executable, "-m", *argv]).returncode == 0
 
@@ -572,17 +586,19 @@ def main() -> int:
         results[f"{pack.name} tests"] = run_pack_tests(pack)
 
     for pack in the_packs:
-        results[f"{pack.name} examples"] = validate_examples(pack.name, [pack.examples])
+        results[f"{pack.name} examples"] = validate_examples(pack.name, pack.examples)
 
     results["cross-boundary examples"] = validate_examples("cross-boundary", [INTEGRATION_EXAMPLES])
 
     results["integration tests"] = run_integration_tests()
 
-    every_example = [pack.examples for pack in the_packs] + [INTEGRATION_EXAMPLES]
+    every_example = [directory for pack in the_packs for directory in pack.examples] + [INTEGRATION_EXAMPLES]
     results["play demos"] = check_play_demos(every_example)
     listing = public_instances()
     results["play demos current"] = check_demos_current(every_example, listing)
-    results["rehearsals on 2.42 and 2.43"] = rehearse_targets([pack.examples for pack in the_packs], listing)
+    results["rehearsals on 2.42 and 2.43"] = rehearse_targets(
+        [directory for pack in the_packs for directory in pack.examples], listing
+    )
 
     print("\n=== integration summary ===")
     for name, passed in results.items():

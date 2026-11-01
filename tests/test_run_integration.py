@@ -1,10 +1,25 @@
-"""The runner installs a pack's dev dependency only when the assembled environment lacks it.
+"""The runner reads each pack's manifest entry, and installs only the dev dependencies it lacks.
 
 The rule is what the environment holds, not what a name looks like: a pack's client library is
 skipped because the pack brought it, not because of the prefix it happens to carry.
 """
 
-from run_integration import missing_dev_dependencies
+from run_integration import CHECKOUTS, Component, missing_dev_dependencies, packs
+
+
+def test_a_pack_naming_no_examples_reads_its_examples_directory():
+    pack = Component("somepack", "https://example.invalid/somepack", "main")
+    assert pack.examples == [CHECKOUTS / "somepack" / "examples"]
+    assert pack.pytest_args == []
+
+
+def test_the_manifest_runs_contrib_without_its_live_tests_and_reads_both_shelves():
+    contrib = next(pack for pack in packs() if pack.name == "dirigent-contrib")
+    assert contrib.pytest_args == ["-m", "not live"]
+    assert contrib.examples == [
+        CHECKOUTS / "dirigent-contrib" / "src" / "dirigent_contrib" / "chap" / "shelves",
+        CHECKOUTS / "dirigent-contrib" / "src" / "dirigent_contrib" / "climate" / "shelves",
+    ]
 
 
 def test_a_present_distribution_is_skipped_whatever_its_prefix():
