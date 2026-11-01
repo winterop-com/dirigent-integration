@@ -6,9 +6,8 @@ validate blocks from the runtime, and neither knows the other exists -- only an 
 environment runs any of these at all.
 
 Most of them read a `d2w fhir serve` facade, which publishes one DHIS2 instance as a FHIR
-endpoint and takes captures back. Two are running on this machine at `http://localhost:8095`
-and `http://localhost:8096`; `fhir_base` defaults to the first, so every read below works
-against a real server. Where a general-purpose FHIR server is the point -- an Encounter, an
+endpoint and takes captures back. Their `fhir-facade` connection points at one on
+`http://localhost:8095`, so start a facade there, or repoint the connection, before a run. Where a general-purpose FHIR server is the point -- an Encounter, an
 Observation, a Subscription, a `_lastUpdated` search, none of which the facade serves -- the
 default is the public HAPI R4 sandbox at `https://hapi.fhir.org/baseR4` instead, and the
 document's header says why.
