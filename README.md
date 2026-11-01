@@ -22,8 +22,11 @@ runnable at all.
 - **`ecosystem.yaml`** -- the manifest: every component and the ref it tracks, the source of
   truth for what gets assembled. `dirigent` (the runtime monorepo) is `role: runtime`,
   installed as dependencies and never cloned; each adapter is `role: pack`, cloned and
-  self-tested here. `dirigent-dhis2` is the first; a future pack becomes real with a single
-  entry.
+  self-tested here. `dirigent-dhis2` and `dirigent-contrib` (Chap and the open climate
+  service) are the two today; a future pack becomes real with a single entry. A pack entry may
+  name `pytest_args` for its suite and `examples` for its example directories: contrib's suite
+  runs with `-m "not live"`, leaving out the tests that reach a real Chap or climate service,
+  and its two shelves under `src/dirigent_contrib/` are validated, never run.
 - **`pyproject.toml`** -- the assembled runtime: every dirigent runtime package plus every
   pack, wired through `[tool.uv.sources]` as git dependencies on `branch = main`, unpinned, so
   the integration always assembles the latest ecosystem.
@@ -49,8 +52,9 @@ make test
 One target, one green or red:
 
 1. clone every `role: pack` in `ecosystem.yaml` into `checkouts/` (gitignored), at its ref;
-2. run each pack's own pytest suite against the assembled environment;
-3. validate each pack's own examples against the merged catalog;
+2. run each pack's own pytest suite against the assembled environment, with the arguments its
+   manifest entry names;
+3. validate each pack's own examples against the merged catalog, connection bodies included;
 4. validate the cross-boundary examples against the merged catalog;
 5. run the integration's own tests;
 6. ask every DHIS2 play demo an example names for its system info, and fail on any that no

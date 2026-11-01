@@ -36,13 +36,33 @@ EXPECTED_BLOCKS = {
         "dhis2.metadata",
         "dhis2.tracker",
     ],
+    "chap": [
+        "chap.alerts.list",
+        "chap.alerts.record",
+        "chap.alerts.reviewed",
+        "chap.backtest.run",
+        "chap.dataset.import",
+        "chap.models.list",
+        "chap.prediction.read",
+        "chap.prediction.run",
+        "chap.thresholds",
+    ],
+    "climate": [
+        "climate.aggregate",
+        "climate.datasets.list",
+        "climate.export",
+        "climate.ingest",
+        "climate.job.result",
+        "climate.job.run",
+        "climate.sync",
+    ],
 }
 
 #: A storage scheme and a connection kind each pack contributes beyond blocks. The file://
 #: scheme is a core built-in, registered when storage is built rather than contributed to the
 #: catalog, so the only contributed scheme in the merged catalog is s3.
 EXPECTED_STORAGE_SCHEMES = ["s3"]
-EXPECTED_CONNECTION_KINDS = ["dhis2", "s3"]
+EXPECTED_CONNECTION_KINDS = ["chap", "climate", "dhis2", "s3"]
 
 CROSS_BOUNDARY = sorted(INTEGRATION_EXAMPLES.rglob("*.yaml"))
 

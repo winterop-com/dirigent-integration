@@ -4,6 +4,9 @@
 # which pack repositories to clone into checkouts/ and at which ref; the CI workflow reads
 # it the same way. dirigent itself is not cloned here -- its workspace packages are installed
 # as dependencies (see pyproject.toml) -- but it is listed so the manifest names the whole set.
+#
+# A pack may name `pytest_args`, added to its pytest command line, and `examples`, its example
+# directories relative to the checkout (`examples` when it names none).
 
 components:
   dirigent:
@@ -17,5 +20,17 @@ components:
     ref: main
     # The first out-of-repo official pack. Cloned so its own tests and examples run here.
     role: pack
+
+  dirigent-contrib:
+    repo: https://github.com/winterop-com/dirigent-contrib
+    ref: main
+    # The packs for outside systems other than DHIS2: Chap and the open climate service. Cloned
+    # so its own tests and examples run here. The tests marked `live` reach a real Chap or
+    # climate service and are left out; the examples are validated, never run.
+    role: pack
+    pytest_args: ["-m", "not live"]
+    examples:
+      - src/dirigent_contrib/chap/shelves
+      - src/dirigent_contrib/climate/shelves
 
   # Future official packs are listed here the same way, each cloned and self-tested.
