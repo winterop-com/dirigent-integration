@@ -41,11 +41,11 @@
 # To make it yours: change org_units, data_set and period, and point bucket at a bucket you
 # own. Which connection backs the s3:// scheme is an instance setting
 # (storage_connections: {s3: <code>}), so nothing about S3 appears in this document beyond
-# the URIs. The dhis2 connection below is the public play server, carried inline so the
-# document runs standalone; an instance you own names its own connection instead.
+# the URIs. The dhis2 connection is named, never carried: `dhis2-play` is the public play
+# server, and an instance you own names its own connection instead.
 #
-#   dg run --local examples/dhis2-values-per-org-unit-to-parquet.yaml
-#   dg run --local examples/dhis2-values-per-org-unit-to-parquet.yaml -p period=202506
+#   dg run --local examples/dhis2-values-per-org-unit-to-parquet.yaml --connections play.yaml
+#   dg run --local examples/dhis2-values-per-org-unit-to-parquet.yaml --connections play.yaml -p period=202506
 
 format: dirigent/v1
 kind: pipeline
@@ -66,17 +66,8 @@ requires:
     - storage.write
     - convert.arrow
     - storage.copy
-
-# The public DHIS2 play server, carried inline so this document runs on its own. A server
-# apply is where a connection is named rather than carried.
-connections:
-  dhis2-demo:
-    kind: dhis2
-    config:
-      base_url: https://play.dhis2.org/2.43
-      basic_username: admin
-      basic_password: district
-      timeout: 60s
+  connections:
+    - dhis2-play
 
 params:
   type: object
@@ -105,7 +96,7 @@ steps:
     for_each: ${params.org_units}
     items: continue
     config:
-      connection: dhis2-demo
+      connection: dhis2-play
       data_set: ${params.data_set}
       period: ${params.period}
       org_unit: ${item}

@@ -32,7 +32,7 @@
 # (storage_connections: {s3: <code>}), exactly as examples/s3 in the dirigent repository
 # sets up; the drop directory can equally be file:// on a worker's disk.
 #
-#   dg run --local examples/inbound/csv-drop-to-data-values.yaml -p day=2026-06-01
+#   dg run --local examples/inbound/csv-drop-to-data-values.yaml --connections play.yaml -p day=2026-06-01
 
 format: dirigent/v1
 kind: pipeline
@@ -59,15 +59,8 @@ requires:
     - dhis2.data_value_set_import
   storage:
     - s3
-
-connections:
-  dhis2-demo:
-    kind: dhis2
-    config:
-      base_url: https://play.dhis2.org/2.43
-      basic_username: admin
-      basic_password: district
-      timeout: 60s
+  connections:
+    - dhis2-play
 
 params:
   type: object
@@ -167,7 +160,7 @@ steps:
     block: dhis2.data_value_set_import
     depends_on: [kept]
     config:
-      connection: dhis2-demo
+      connection: dhis2-play
       # The envelope is assembled here rather than in a step of its own: the list is the
       # only part any earlier step had an opinion about.
       data_values:

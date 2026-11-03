@@ -9,8 +9,9 @@ Every one of them:
 
 - names every block it uses under `requires: blocks:`, so an environment missing one refuses
   the document rather than failing halfway through a run;
-- carries its DHIS2 connection in the document, pointed at the public play server, so
-  `dg run --local <file>` works with nothing applied and nothing configured;
+- names its DHIS2 connection, `dhis2-play`, under `requires.connections` and carries no
+  credential, so a local run is handed it: `dg run --local <file> --connections play.yaml`,
+  with `play.yaml` as the repository README shows it;
 - imports with `dry_run` defaulting to true. The play server is shared: leave it that way
   there, and turn it off against an instance of your own;
 - uses ids that exist on the demo. `WUg3MYWQ7pt` (Total Population, yearly) and

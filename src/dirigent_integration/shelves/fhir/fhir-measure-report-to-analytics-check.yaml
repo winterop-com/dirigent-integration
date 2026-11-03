@@ -53,8 +53,8 @@
 # the diff says `unavailable` and the receiver hears about it. A reconciliation that crashed
 # when one side was quiet would be silent exactly when something is wrong.
 #
-#   dg run --local examples/fhir/fhir-measure-report-to-analytics-check.yaml
-#   dg run --local examples/fhir/fhir-measure-report-to-analytics-check.yaml -p tolerance=0.1
+#   dg run --local examples/fhir/fhir-measure-report-to-analytics-check.yaml --connections play.yaml
+#   dg run --local examples/fhir/fhir-measure-report-to-analytics-check.yaml --connections play.yaml -p tolerance=0.1
 
 format: dirigent/v1
 kind: pipeline
@@ -78,19 +78,14 @@ requires:
     - dhis2.analytics_query
     - transform.jq
     - webhook.post
+  connections:
+    - dhis2-play
 
 connections:
   fhir-reports:
     kind: http
     config:
       base_url: https://hapi.fhir.org/baseR4
-      timeout: 60s
-  dhis2-demo:
-    kind: dhis2
-    config:
-      base_url: https://play.dhis2.org/2.43
-      basic_username: admin
-      basic_password: district
       timeout: 60s
   # Where a discrepancy is delivered. Postman Echo stands in for the receiver so the document
   # runs; hmac_secret would let webhook.post sign the body, which is what a receiver that
@@ -155,7 +150,7 @@ steps:
   read_analytics:
     block: dhis2.analytics_query
     config:
-      connection: dhis2-demo
+      connection: dhis2-play
       mode: aggregate
       dimension:
         - "dx:${params.indicator}"

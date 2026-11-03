@@ -61,8 +61,8 @@
 # wrong lesson -- so `enrollment_uid` is a parameter, which is exactly where a real forwarder
 # derives one deterministically so a rehearsal and an import name the same object.
 #
-#   dg run --local examples/fhir/fhir-patient-to-tracked-entity.yaml
-#   dg run --local examples/fhir/fhir-patient-to-tracked-entity.yaml -p search_identifier=299554435
+#   dg run --local examples/fhir/fhir-patient-to-tracked-entity.yaml --connections play.yaml
+#   dg run --local examples/fhir/fhir-patient-to-tracked-entity.yaml --connections play.yaml -p search_identifier=299554435
 
 format: dirigent/v1
 kind: pipeline
@@ -84,6 +84,8 @@ requires:
   blocks:
     - http.request
     - transform.jq
+  connections:
+    - dhis2-play
 
 connections:
   fhir-facade:
@@ -91,16 +93,6 @@ connections:
     config:
       base_url: http://localhost:8095
       timeout: 30s
-  # Driven by two different blocks below: `dhis2.*` blocks would resolve it through
-  # dhis2w-client, and `http.request` resolves the same record structurally. The password is a
-  # SecretStr either way -- sealed on the way in, redacted in every read back.
-  dhis2-demo:
-    kind: dhis2
-    config:
-      base_url: https://play.dhis2.org/2.43
-      basic_username: admin
-      basic_password: district
-      timeout: 60s
 
 params:
   type: object
@@ -200,7 +192,7 @@ steps:
     block: http.request
     depends_on: [to_tracker_payload]
     config:
-      connection: dhis2-demo
+      connection: dhis2-play
       path: /api/tracker
       method: POST
       query:

@@ -61,7 +61,7 @@
 # `page_size` is what one page holds. Add a type to the list and the grid grows on the next
 # firing with nothing else edited.
 #
-#   dg run --local examples/fhir/fhir-nightly-window-sync.yaml --window 2026-09-01..2026-09-02
+#   dg run --local examples/fhir/fhir-nightly-window-sync.yaml --connections play.yaml --window 2026-09-01..2026-09-02
 #   dg apply examples/fhir/fhir-nightly-window-sync.yaml
 #   dg backfill fhir-nightly-window-sync --schedule nightly \
 #     --from 2026-09-01T05:00:00Z --to 2026-09-08T05:00:00Z --dry-run
@@ -87,16 +87,8 @@ requires:
   blocks:
     - http.request
     - transform.jq
-
-connections:
-  # The instance this sync feeds, read by the target step and written by nothing here.
-  dhis2-demo:
-    kind: dhis2
-    config:
-      base_url: https://play.dhis2.org/2.43
-      basic_username: admin
-      basic_password: district
-      timeout: 60s
+  connections:
+    - dhis2-play
 
 params:
   type: object
@@ -176,7 +168,7 @@ steps:
     depends_on: [summarise]
     continue_on_failure: true
     config:
-      connection: dhis2-demo
+      connection: dhis2-play
       path: /api/system/info
       method: GET
 

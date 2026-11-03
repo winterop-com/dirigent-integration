@@ -37,8 +37,8 @@
 # What makes it yours: the `fhir-server` connection pointed at your server, the lookup table,
 # and the org unit.
 #
-#   dg run --local examples/inbound/fhir-observations-to-data-values.yaml
-#   dg run --local examples/inbound/fhir-observations-to-data-values.yaml -p count=50
+#   dg run --local examples/inbound/fhir-observations-to-data-values.yaml --connections play.yaml
+#   dg run --local examples/inbound/fhir-observations-to-data-values.yaml --connections play.yaml -p count=50
 
 format: dirigent/v1
 kind: pipeline
@@ -59,15 +59,10 @@ requires:
     - transform.jq
     - validate.schema
     - dhis2.data_value_set_import
+  connections:
+    - dhis2-play
 
 connections:
-  dhis2-demo:
-    kind: dhis2
-    config:
-      base_url: https://play.dhis2.org/2.43
-      basic_username: admin
-      basic_password: district
-      timeout: 60s
   # The outside end is a connection rather than a bare url because a real FHIR server is
   # authenticated and versioned, and both belong to the server rather than to the step.
   fhir-server:
@@ -191,6 +186,6 @@ steps:
     block: dhis2.data_value_set_import
     depends_on: [gate]
     config:
-      connection: dhis2-demo
+      connection: dhis2-play
       data_values: "${steps.gate.output.value}"
       dry_run: "${params.dry_run}"

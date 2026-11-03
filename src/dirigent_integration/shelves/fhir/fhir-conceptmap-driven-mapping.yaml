@@ -51,8 +51,8 @@
 # the right shape for a handful of lookups and the wrong one for a bundle: fetching the map
 # once and applying it in-process is one request rather than one per answer.
 #
-#   dg run --local examples/fhir/fhir-conceptmap-driven-mapping.yaml
-#   dg run --local examples/fhir/fhir-conceptmap-driven-mapping.yaml \
+#   dg run --local examples/fhir/fhir-conceptmap-driven-mapping.yaml --connections play.yaml
+#   dg run --local examples/fhir/fhir-conceptmap-driven-mapping.yaml --connections play.yaml \
 #     -p target_system=http://dhis2.org/fhir/id/option-code
 
 format: dirigent/v1
@@ -78,6 +78,8 @@ requires:
     - value.const
     - transform.jq
     - dhis2.data_value_set_import
+  connections:
+    - dhis2-play
 
 connections:
   fhir-facade:
@@ -85,15 +87,6 @@ connections:
     config:
       base_url: http://localhost:8095
       timeout: 30s
-  # The public DHIS2 play server, carried inline so this document runs standalone. Against an
-  # instance you own, name a connection that instance holds instead of carrying one.
-  dhis2-demo:
-    kind: dhis2
-    config:
-      base_url: https://play.dhis2.org/2.43
-      basic_username: admin
-      basic_password: district
-      timeout: 60s
 
 params:
   type: object
@@ -219,7 +212,7 @@ steps:
     block: dhis2.data_value_set_import
     depends_on: [to_data_values]
     config:
-      connection: dhis2-demo
+      connection: dhis2-play
       data_values: ${steps.to_data_values.output.value.document}
       dry_run: true
       import_strategy: CREATE_AND_UPDATE

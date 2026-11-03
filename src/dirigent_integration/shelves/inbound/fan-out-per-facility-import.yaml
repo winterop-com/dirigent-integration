@@ -40,8 +40,8 @@
 # What makes it yours: the facilities list, the endpoint each one answers on, and where the
 # reconciliation is posted.
 #
-#   dg run --local examples/inbound/fan-out-per-facility-import.yaml
-#   dg run --local examples/inbound/fan-out-per-facility-import.yaml \
+#   dg run --local examples/inbound/fan-out-per-facility-import.yaml --connections play.yaml
+#   dg run --local examples/inbound/fan-out-per-facility-import.yaml --connections play.yaml \
 #     -p facilities='[{"code":"ngelehun-chc","org_unit":"DiszpKrYNg8","reported":42}]'
 
 format: dirigent/v1
@@ -63,15 +63,8 @@ requires:
     - transform.jq
     - dhis2.data_value_set_import
     - webhook.post
-
-connections:
-  dhis2-demo:
-    kind: dhis2
-    config:
-      base_url: https://play.dhis2.org/2.43
-      basic_username: admin
-      basic_password: district
-      timeout: 60s
+  connections:
+    - dhis2-play
 
 params:
   type: object
@@ -163,7 +156,7 @@ steps:
     block: dhis2.data_value_set_import
     depends_on: [batch]
     config:
-      connection: dhis2-demo
+      connection: dhis2-play
       data_values: "${steps.batch.output.value}"
       dry_run: "${params.dry_run}"
       # One facility's bad row must not cost the district its import; the conflicts come

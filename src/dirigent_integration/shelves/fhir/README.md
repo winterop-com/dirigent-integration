@@ -65,8 +65,8 @@ option set is in the regenerated map, and the pipeline that reads it needs no ed
 ## Running them
 
 ```bash
-dg run --local examples/fhir/fhir-capture-bundle-to-data-values.yaml
-dg run --local examples/fhir/fhir-conceptmap-driven-mapping.yaml \
+dg run --local examples/fhir/fhir-capture-bundle-to-data-values.yaml --connections play.yaml
+dg run --local examples/fhir/fhir-conceptmap-driven-mapping.yaml --connections play.yaml \
   -p target_system=http://dhis2.org/fhir/id/option-code
 ```
 
@@ -74,5 +74,5 @@ One of them reads the window its firing covers, which no document declares and o
 carries, so an ad hoc run has to say which interval it is for:
 
 ```bash
-dg run --local examples/fhir/fhir-nightly-window-sync.yaml --window 2026-09-01..2026-09-02
+dg run --local examples/fhir/fhir-nightly-window-sync.yaml --connections play.yaml --window 2026-09-01..2026-09-02
 ```

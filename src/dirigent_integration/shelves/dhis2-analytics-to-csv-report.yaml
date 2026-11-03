@@ -33,8 +33,8 @@
 # your own. Which connection backs s3:// is an instance setting (storage_connections:
 # {s3: <code>}).
 #
-#   dg run --local examples/dhis2-analytics-to-csv-report.yaml
-#   dg run --local examples/dhis2-analytics-to-csv-report.yaml -p period=LAST_4_QUARTERS
+#   dg run --local examples/dhis2-analytics-to-csv-report.yaml --connections play.yaml
+#   dg run --local examples/dhis2-analytics-to-csv-report.yaml --connections play.yaml -p period=LAST_4_QUARTERS
 
 format: dirigent/v1
 kind: pipeline
@@ -54,17 +54,8 @@ requires:
     - storage.write
     - convert.std
     - webhook.post
-
-# The public DHIS2 play server, carried inline so this document runs standalone. An instance
-# you own names a connection it holds instead of carrying one.
-connections:
-  dhis2-demo:
-    kind: dhis2
-    config:
-      base_url: https://play.dhis2.org/2.43
-      basic_username: admin
-      basic_password: district
-      timeout: 60s
+  connections:
+    - dhis2-play
 
 params:
   type: object
@@ -93,7 +84,7 @@ steps:
   query:
     block: dhis2.analytics_query
     config:
-      connection: dhis2-demo
+      connection: dhis2-play
       mode: aggregate
       # dimension axes are what the grid is broken down by; filter axes fix a dimension the
       # grid is not broken down by. Putting ou in filter is what makes the report two columns

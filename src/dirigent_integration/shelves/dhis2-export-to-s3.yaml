@@ -16,9 +16,9 @@
 #            worker.
 #
 # Which connection backs the s3:// scheme is an instance setting (storage_connections:
-# {s3: <code>}), so the document carries only the dhis2 connection it names directly.
+# {s3: <code>}), so the only connection the document names is the dhis2 one.
 #
-#   dg run --local examples/dhis2-export-to-s3.yaml
+#   dg run --local examples/dhis2-export-to-s3.yaml --connections play.yaml
 
 format: dirigent/v1
 kind: pipeline
@@ -33,21 +33,14 @@ requires:
     - dhis2.data_value_set_export
     - storage.write
     - storage.copy
-
-connections:
-  dhis2-demo:
-    kind: dhis2
-    config:
-      base_url: https://play.dhis2.org/2.43
-      basic_username: admin
-      basic_password: district
-      timeout: 60s
+  connections:
+    - dhis2-play
 
 steps:
   export:
     block: dhis2.data_value_set_export
     config:
-      connection: dhis2-demo
+      connection: dhis2-play
       data_set: BfMAe6Itzgt
       period: "202507"
       org_unit: vSbt6cezomG

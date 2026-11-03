@@ -31,8 +31,8 @@
 # table is dropped rather than guessed at, and the drop is counted and reported, because an
 # answer that silently vanishes is worse than an import that refuses.
 #
-#   dg run --local examples/fhir/fhir-questionnaire-response-to-data-values.yaml
-#   dg run --local examples/fhir/fhir-questionnaire-response-to-data-values.yaml -p period=202607
+#   dg run --local examples/fhir/fhir-questionnaire-response-to-data-values.yaml --connections play.yaml
+#   dg run --local examples/fhir/fhir-questionnaire-response-to-data-values.yaml --connections play.yaml -p period=202607
 
 format: dirigent/v1
 kind: pipeline
@@ -53,15 +53,8 @@ requires:
     - value.const
     - transform.jq
     - dhis2.data_value_set_import
-
-connections:
-  dhis2-demo:
-    kind: dhis2
-    config:
-      base_url: https://play.dhis2.org/2.43
-      basic_username: admin
-      basic_password: district
-      timeout: 60s
+  connections:
+    - dhis2-play
 
 params:
   type: object
@@ -165,7 +158,7 @@ steps:
     block: dhis2.data_value_set_import
     depends_on: [translate]
     config:
-      connection: dhis2-demo
+      connection: dhis2-play
       data_values: "${steps.translate.output.value.document}"
       # dryRun on /api/dataValueSets. The instance validates every value against the data set,
       # the period and the org unit and reports conflicts, and writes nothing.
