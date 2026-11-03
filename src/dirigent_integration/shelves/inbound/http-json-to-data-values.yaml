@@ -26,8 +26,8 @@
 # dry_run defaults to true, so a first run asks the instance to validate the document and
 # write nothing. The play server is shared, so leave it true there.
 #
-#   dg run --local examples/inbound/http-json-to-data-values.yaml
-#   dg run --local examples/inbound/http-json-to-data-values.yaml \
+#   dg run --local examples/inbound/http-json-to-data-values.yaml --connections play.yaml
+#   dg run --local examples/inbound/http-json-to-data-values.yaml --connections play.yaml \
 #     -p source_url=https://api.worldbank.org/v2/country/NGA/indicator/SP.POP.TOTL
 
 format: dirigent/v1
@@ -48,15 +48,8 @@ requires:
     - transform.jq
     - validate.schema
     - dhis2.data_value_set_import
-
-connections:
-  dhis2-demo:
-    kind: dhis2
-    config:
-      base_url: https://play.dhis2.org/2.43
-      basic_username: admin
-      basic_password: district
-      timeout: 60s
+  connections:
+    - dhis2-play
 
 params:
   type: object
@@ -145,6 +138,6 @@ steps:
     block: dhis2.data_value_set_import
     depends_on: [gate]
     config:
-      connection: dhis2-demo
+      connection: dhis2-play
       data_values: "${steps.gate.output.value}"
       dry_run: "${params.dry_run}"

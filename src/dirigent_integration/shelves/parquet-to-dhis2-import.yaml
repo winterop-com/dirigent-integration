@@ -40,8 +40,8 @@
 # nothing is written. Which connection backs s3:// is an instance setting
 # (storage_connections: {s3: <code>}).
 #
-#   dg run --local examples/parquet-to-dhis2-import.yaml
-#   dg run --local examples/parquet-to-dhis2-import.yaml -p dry_run=false   # against your own instance
+#   dg run --local examples/parquet-to-dhis2-import.yaml --connections play.yaml
+#   dg run --local examples/parquet-to-dhis2-import.yaml --connections play.yaml -p dry_run=false   # against your own instance
 
 format: dirigent/v1
 kind: pipeline
@@ -60,17 +60,8 @@ requires:
     - validate.schema
     - dhis2.data_value_set_import
     - dhis2.data_set_complete
-
-# The public DHIS2 play server, carried inline so this document runs standalone. Against an
-# instance you own, name a connection that instance holds instead of carrying one.
-connections:
-  dhis2-demo:
-    kind: dhis2
-    config:
-      base_url: https://play.dhis2.org/2.43
-      basic_username: admin
-      basic_password: district
-      timeout: 60s
+  connections:
+    - dhis2-play
 
 # Carried in the document, so the gate needs nothing handed to it and a --local run checks the
 # same shape a server would. dhis2-uid and dhis2-period are formats the dhis2 pack contributes
@@ -172,7 +163,7 @@ steps:
     block: dhis2.data_value_set_import
     depends_on: [gate]
     config:
-      connection: dhis2-demo
+      connection: dhis2-play
       # Read from the gate rather than from shape: the reference is what proves, in the
       # document itself, that nothing reaches DHIS2 without passing the schema.
       data_values: ${steps.gate.output.value}
@@ -189,7 +180,7 @@ steps:
     deadline: 72h
     on_timeout: skip
     config:
-      connection: dhis2-demo
+      connection: dhis2-play
       data_set: ${params.data_set}
       period: ${params.period}
       org_unit: ${params.org_unit}

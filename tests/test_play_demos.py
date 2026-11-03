@@ -3,14 +3,19 @@
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from run_integration import (
     DHIS2_TARGETS,
+    PLAY_BASE_URL,
+    PLAY_CONNECTION,
+    REHEARSAL_ACCOUNT,
     PlayDemo,
     Rehearsal,
     check_demos_current,
     check_play_demos,
+    play_connections,
     play_demos,
-    point_at,
     read_rehearsal,
     rehearse_targets,
     stable_demos,
@@ -18,7 +23,7 @@ from run_integration import (
 
 
 def write(directory: Path, name: str, base_url: str, kind: str = "dhis2") -> Path:
-    """Write a pipeline document carrying one connection."""
+    """Write a pipeline document carrying one connection without a credential."""
     path = directory / name
     path.write_text(
         f"""code: {path.stem}
@@ -27,11 +32,16 @@ connections:
     kind: {kind}
     config:
       base_url: {base_url}
-      basic_username: admin
-      basic_password: district
 steps: {{}}
 """
     )
+    return path
+
+
+def name_play(directory: Path, name: str) -> Path:
+    """Write a pipeline document naming the play connection under requires."""
+    path = directory / name
+    path.write_text(f"code: {path.stem}\nrequires:\n  connections: [{PLAY_CONNECTION}]\nsteps: {{}}\n")
     return path
 
 
@@ -40,9 +50,24 @@ def test_an_address_named_twice_is_one_demo(tmp_path: Path) -> None:
     second = write(tmp_path, "b.yaml", "https://play.im.dhis2.org/stable-2-43-2/")
     demos = play_demos([tmp_path])
     assert list(demos) == ["https://play.im.dhis2.org/stable-2-43-2"]
-    demo = demos["https://play.im.dhis2.org/stable-2-43-2"]
-    assert demo.named_by == [first, second]
-    assert (demo.username, demo.password) == ("admin", "district")
+    assert demos["https://play.im.dhis2.org/stable-2-43-2"].named_by == [first, second]
+
+
+def test_a_document_naming_the_play_connection_reaches_its_demo(tmp_path: Path) -> None:
+    first = name_play(tmp_path, "a.yaml")
+    second = name_play(tmp_path, "b.yaml")
+    demos = play_demos([tmp_path])
+    assert list(demos) == [PLAY_BASE_URL]
+    assert demos[PLAY_BASE_URL].named_by == [first, second]
+
+
+def test_a_rehearsal_signs_in_as_the_full_access_account_at_its_target() -> None:
+    target = "https://play.im.dhis2.org/stable-2-42-7"
+    connection = play_connections(target, REHEARSAL_ACCOUNT)[PLAY_CONNECTION]
+    assert connection["kind"] == "dhis2"
+    assert connection["config"]["base_url"] == target
+    assert (connection["config"]["basic_username"], connection["config"]["basic_password"]) == REHEARSAL_ACCOUNT
+    assert yaml.safe_load(yaml.safe_dump(play_connections(target))) == play_connections(target)
 
 
 def test_only_dhis2_connections_on_a_play_host_are_collected(tmp_path: Path) -> None:
@@ -160,14 +185,3 @@ def test_one_failed_rehearsal_fails_the_stage(tmp_path: Path) -> None:
     (tmp_path / "dhis2-rehearse-import.yaml").write_text("steps: {}\n")
     outcomes = iter([Rehearsal(True, 16, "SUCCESS", 0), Rehearsal(True, 0, "SUCCESS", 0)])
     assert rehearse_targets([tmp_path], LISTING, lambda document, hostname: next(outcomes)) is False
-
-
-def test_a_rehearsal_points_a_pinned_demo_or_a_version_alias_at_its_target() -> None:
-    target = "https://play.im.dhis2.org/stable-2-42-7"
-    for address in (
-        "https://play.im.dhis2.org/stable-2-43-2",
-        "https://play.im.dhis2.org/stable-2-43-2-1",
-        "https://play.dhis2.org/2.43",
-    ):
-        document = f"base_url: {address}\nbasic_username: admin\nbasic_password: district\n"
-        assert point_at(document, target) == f"base_url: {target}\nbasic_username: system\nbasic_password: System123\n"

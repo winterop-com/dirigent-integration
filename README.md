@@ -123,6 +123,31 @@ cross-boundary pipelines across them are authored here the same way.
 - **`examples/dhis2-metadata-snapshot.yaml`** -- a metadata snapshot written to `s3://`, then
   `pipeline.run` of `dhis2-export-to-s3`: composition across the corpus itself.
 
+No document carries a credential. Every one that reaches DHIS2 names the `dhis2` connection
+`dhis2-play` under `requires.connections`, the code the `dirigent-dhis2` shelves use, and the
+instance holds it. Create it once against the public play demo; the command asks how to sign
+in, and the demo takes the login it publishes on its own sign-in page:
+
+```bash
+dg connection create dhis2 dhis2-play --set base_url=https://play.dhis2.org/2.43 --set timeout=60s
+```
+
+A `--local` run has no instance to hold it, so it is handed a connections file, `play.yaml`
+in every header here:
+
+```yaml
+dhis2-play:
+  kind: dhis2
+  config:
+    base_url: https://play.dhis2.org/2.43
+    basic_username: <the demo's published username>
+    basic_password: <its password>
+    timeout: 60s
+```
+
+`make test` creates the same connection itself, from the demo login `scripts/run_integration.py`
+holds, to rehearse against the play demos.
+
 ## FHIR examples
 
 `examples/fhir/` is a shelf of its own: nine pipelines moving data between a FHIR endpoint and
@@ -167,9 +192,9 @@ vocabulary the shelf is built on -- subject, capture, ConceptMap.
 transform, DHIS2 -- teaching the shapes an inbound integration actually takes: a public JSON
 API, a csv dropped in a bucket, an encounter pushed to an endpoint, a parquet table from a lakehouse, a FHIR
 Observation feed, a windowed weekly pull, a fan-out across facilities, and the defensive
-version with every guard on. Each names every block it needs, carries its DHIS2 connection
-pointed at the public play server, and imports as a dry run by default, so
-`dg run --local examples/inbound/<file>` works with nothing set up.
+version with every guard on. Each names every block it needs and its DHIS2 connection,
+`dhis2-play`, and imports as a dry run by default, so
+`dg run --local examples/inbound/<file> --connections play.yaml` works against the demo.
 `examples/inbound/README.md` lists them one line each.
 
 ## The batteries-included image

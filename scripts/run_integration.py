@@ -69,9 +69,15 @@ DHIS2_TARGETS = ("2.42", "2.43")
 #: that patch where there is one (``stable-2-42-7-1``).
 STABLE_DEMO = re.compile(r"^stable-(\d+)-(\d+)-(\d+)(?:-(\d+))?$")
 
-#: A play demo address in a document, pinned or a version alias, which a rehearsal points at
-#: its target instead.
-PLAY_ADDRESS = re.compile(r"https://play\.(?:im\.dhis2\.org/stable-\d+-\d+-\d+(?:-\d+)?|dhis2\.org/\d+\.\d+)")
+#: The code of the ``dhis2`` connection every shelf names for the public play demo. No document
+#: carries it; the instance or a local run's connections file does.
+PLAY_CONNECTION = "dhis2-play"
+
+#: Where the play connection points outside a rehearsal.
+PLAY_BASE_URL = "https://play.dhis2.org/2.43"
+
+#: The login the play demos publish on their own sign-in page.
+PLAY_ACCOUNT = ("admin", "district")
 
 #: The example a rehearsal runs: an export, then the same values imported as a dry run.
 REHEARSAL = "dhis2-rehearse-import.yaml"
@@ -244,14 +250,32 @@ def referenced_connections(path: Path) -> set[str]:
     return codes
 
 
-def connection_body_issues(definition: Any, host: PluginHost) -> list[str]:
+def play_connections(base_url: str = PLAY_BASE_URL, account: tuple[str, str] = PLAY_ACCOUNT) -> dict[str, Any]:
+    """The connections file a local run against one play demo is handed, signed in as one account."""
+    username, password = account
+    return {
+        PLAY_CONNECTION: {
+            "kind": "dhis2",
+            "config": {
+                "base_url": base_url,
+                "basic_username": username,
+                "basic_password": password,
+                "timeout": "2m",
+            },
+        }
+    }
+
+
+def connection_body_issues(definition: Any, host: PluginHost, *, refuse_secrets: bool = True) -> list[str]:
     """Every problem in the config body of a connection the document carries.
 
     The catalog check reads a connection's code and stops there, so a body carrying a field its
     kind no longer has passes it and is refused only when a block resolves the connection mid-run.
     A kind's config model forbids an unknown key, so validating a carried body against it here is
-    the refusal an apply makes, at the time the document is checked.
+    the refusal an apply makes, at the time the document is checked. A document never carries a
+    secret, so with `refuse_secrets` a field the kind types as one is refused too.
     """
+    from dirigent_core.secrets import secret_fields
     from pydantic import ValidationError
 
     issues: list[str] = []
@@ -260,6 +284,12 @@ def connection_body_issues(definition: Any, host: PluginHost) -> list[str]:
         if kind is None:
             issues.append(f"connections.{code}.kind: no installed pack contributes a {connection.kind!r} connection")
             continue
+        for field in secret_fields(kind.config_model) if refuse_secrets else []:
+            if field in connection.config:
+                issues.append(
+                    f"connections.{code}.config.{field}: a document carries no secret; "
+                    "name the connection under requires.connections"
+                )
         try:
             kind.config_model.model_validate(connection.config)
         except ValidationError as error:
@@ -270,14 +300,14 @@ def connection_body_issues(definition: Any, host: PluginHost) -> list[str]:
     return issues
 
 
-def validate_examples(label: str, directories: list[Path]) -> bool:
+def validate_examples(label: str, directories: list[Path], *, refuse_secrets: bool = False) -> bool:
     """Structurally validate a set of example directories against the merged catalog.
 
     The integration may import dirigent-core to do this; a pack, which must not know the whole
     ecosystem, cannot. That asymmetry is the point: only here is every pack loaded at once.
 
     A carried connection's config body is checked against its kind's own model as well, which
-    the catalog check does not read.
+    the catalog check does not read, and with `refuse_secrets` a carried secret is refused.
     """
     from dirigent_client.schemas.catalog import Catalog
     from dirigent_core.documents import DocumentError, load_text, validate_against_catalog
@@ -311,7 +341,9 @@ def validate_examples(label: str, directories: list[Path]) -> bool:
             check_blocks=True,
             blocks=blocks,
         )
-        problems = [str(issue) for issue in issues] + connection_body_issues(definition, host)
+        problems = [str(issue) for issue in issues] + connection_body_issues(
+            definition, host, refuse_secrets=refuse_secrets
+        )
         if problems:
             ok = False
             print(f"  invalid  {rel}")
@@ -323,47 +355,52 @@ def validate_examples(label: str, directories: list[Path]) -> bool:
 
 
 class PlayDemo:
-    """One play demo address, the credentials an example signs in with, and who names it."""
+    """One play demo address and the examples that reach it."""
 
-    def __init__(self, base_url: str, username: str | None, password: str | None) -> None:
-        """Bind an address to the first credentials an example gave for it."""
+    def __init__(self, base_url: str) -> None:
+        """Bind an address, named by no example yet."""
         self.base_url = base_url
-        self.username = username
-        self.password = password
         self.named_by: list[Path] = []
 
 
+def demo_addresses(definition: Any) -> list[str]:
+    """Every play demo address a document reaches: through the play connection it names, or a carried one."""
+    if not isinstance(definition, dict):
+        return []
+    addresses: list[str] = []
+    requires = definition.get("requires")
+    named = requires.get("connections") if isinstance(requires, dict) else None
+    if isinstance(named, list) and PLAY_CONNECTION in named:
+        addresses.append(PLAY_BASE_URL)
+    for connection in (definition.get("connections") or {}).values():
+        if not isinstance(connection, dict) or connection.get("kind") != "dhis2":
+            continue
+        base_url = (connection.get("config") or {}).get("base_url")
+        if isinstance(base_url, str) and urlsplit(base_url).hostname in PLAY_HOSTS:
+            addresses.append(base_url.rstrip("/"))
+    return addresses
+
+
 def play_demos(directories: list[Path]) -> dict[str, PlayDemo]:
-    """Every play demo a carried ``dhis2`` connection points at, keyed by its address."""
+    """Every play demo the documents reach, keyed by its address."""
     demos: dict[str, PlayDemo] = {}
     for directory in directories:
         if not directory.is_dir():
             continue
         for path in example_documents(directory):
-            definition = yaml.safe_load(path.read_text()) or {}
-            connections = definition.get("connections") if isinstance(definition, dict) else None
-            for connection in (connections or {}).values():
-                if not isinstance(connection, dict) or connection.get("kind") != "dhis2":
-                    continue
-                config = connection.get("config") or {}
-                base_url = config.get("base_url")
-                if not isinstance(base_url, str) or urlsplit(base_url).hostname not in PLAY_HOSTS:
-                    continue
-                base_url = base_url.rstrip("/")
-                demo = demos.setdefault(
-                    base_url, PlayDemo(base_url, config.get("basic_username"), config.get("basic_password"))
-                )
+            for base_url in demo_addresses(yaml.safe_load(path.read_text())):
+                demo = demos.setdefault(base_url, PlayDemo(base_url))
                 if path not in demo.named_by:
                     demo.named_by.append(path)
     return demos
 
 
 def demo_status(demo: PlayDemo) -> int | str:
-    """The status a play demo's system info answers with, or why nothing answered."""
+    """The status a play demo's system info answers with, signed in with its published login."""
     request = urllib.request.Request(f"{demo.base_url}/api/system/info")
-    if demo.username and demo.password:
-        token = base64.b64encode(f"{demo.username}:{demo.password}".encode()).decode()
-        request.add_header("Authorization", f"Basic {token}")
+    username, password = PLAY_ACCOUNT
+    token = base64.b64encode(f"{username}:{password}".encode()).decode()
+    request.add_header("Authorization", f"Basic {token}")
     try:
         with urllib.request.urlopen(request, timeout=PLAY_TIMEOUT_SECONDS) as response:
             return int(response.status)
@@ -498,23 +535,21 @@ def read_rehearsal(stream: str) -> Rehearsal:
     return Rehearsal(succeeded, exported, status, conflicts)
 
 
-def point_at(document: str, hostname: str) -> str:
-    """Point every play demo address in a document at one demo, signed in as the full-access account."""
-    username, password = REHEARSAL_ACCOUNT
-    pointed = PLAY_ADDRESS.sub(hostname, document)
-    pointed = re.sub(r"basic_username: \S+", f"basic_username: {username}", pointed)
-    return re.sub(r"basic_password: \S+", f"basic_password: {password}", pointed)
-
-
 def rehearse(document: str, hostname: str) -> Rehearsal:
-    """Run the rehearsal document against one play demo, as the full-access account."""
-    pointed = point_at(document, hostname)
+    """Run the rehearsal document against one play demo, as the full-access account.
+
+    The document names the play connection and carries none, so the run is handed one that
+    points at the demo.
+    """
     with tempfile.TemporaryDirectory() as scratch:
         path = Path(scratch) / REHEARSAL
-        path.write_text(pointed)
+        path.write_text(document)
+        connections = Path(scratch) / "connections.yaml"
+        connections.write_text(yaml.safe_dump(play_connections(hostname, REHEARSAL_ACCOUNT)))
+        dg = str(Path(sys.executable).parent / "dg")
         try:
             finished = subprocess.run(
-                [str(Path(sys.executable).parent / "dg"), "--json", "run", "--local", str(path)],
+                [dg, "--json", "run", "--local", str(path), "--connections", str(connections)],
                 cwd=scratch,
                 capture_output=True,
                 text=True,
@@ -588,7 +623,9 @@ def main() -> int:
     for pack in the_packs:
         results[f"{pack.name} examples"] = validate_examples(pack.name, pack.examples)
 
-    results["cross-boundary examples"] = validate_examples("cross-boundary", [INTEGRATION_EXAMPLES])
+    results["cross-boundary examples"] = validate_examples(
+        "cross-boundary", [INTEGRATION_EXAMPLES], refuse_secrets=True
+    )
 
     results["integration tests"] = run_integration_tests()
 

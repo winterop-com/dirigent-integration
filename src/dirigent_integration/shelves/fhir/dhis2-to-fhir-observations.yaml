@@ -55,8 +55,8 @@
 # `identifier_base` is the system every identifier and code is minted under, and it must be the
 # same base the FHIR side of your project already uses.
 #
-#   dg run --local examples/fhir/dhis2-to-fhir-observations.yaml
-#   dg run --local examples/fhir/dhis2-to-fhir-observations.yaml -p period=202507
+#   dg run --local examples/fhir/dhis2-to-fhir-observations.yaml --connections play.yaml
+#   dg run --local examples/fhir/dhis2-to-fhir-observations.yaml --connections play.yaml -p period=202507
 
 format: dirigent/v1
 kind: pipeline
@@ -79,15 +79,10 @@ requires:
     - dhis2.data_value_set_export
     - transform.jq
     - http.request
+  connections:
+    - dhis2-play
 
 connections:
-  dhis2-demo:
-    kind: dhis2
-    config:
-      base_url: https://play.dhis2.org/2.43
-      basic_username: admin
-      basic_password: district
-      timeout: 60s
   # A public FHIR R4 sandbox, open to anyone, which is exactly why the Bundle below is keyed:
   # a shared server that everybody publishes to is where duplicate-on-republish shows up first.
   fhir-target:
@@ -122,7 +117,7 @@ steps:
   export:
     block: dhis2.data_value_set_export
     config:
-      connection: dhis2-demo
+      connection: dhis2-play
       data_set: "${params.data_set}"
       period: "${params.period}"
       org_unit: "${params.org_unit}"

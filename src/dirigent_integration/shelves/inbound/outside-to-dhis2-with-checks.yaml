@@ -39,8 +39,8 @@
 # true so this document is safe against the shared play server, and the second import
 # becomes real by setting it false against an instance of your own.
 #
-#   dg run --local examples/inbound/outside-to-dhis2-with-checks.yaml
-#   dg run --local examples/inbound/outside-to-dhis2-with-checks.yaml -p commit_dry_run=false   # against your own instance
+#   dg run --local examples/inbound/outside-to-dhis2-with-checks.yaml --connections play.yaml
+#   dg run --local examples/inbound/outside-to-dhis2-with-checks.yaml --connections play.yaml -p commit_dry_run=false   # against your own instance
 
 format: dirigent/v1
 kind: pipeline
@@ -64,15 +64,10 @@ requires:
     - validate.schema
     - dhis2.data_value_set_import
     - dhis2.data_set_complete
+  connections:
+    - dhis2-play
 
 connections:
-  dhis2-demo:
-    kind: dhis2
-    config:
-      base_url: https://play.dhis2.org/2.43
-      basic_username: admin
-      basic_password: district
-      timeout: 60s
   source:
     kind: http
     config:
@@ -211,7 +206,7 @@ steps:
     block: dhis2.data_value_set_import
     depends_on: [value_gate]
     config:
-      connection: dhis2-demo
+      connection: dhis2-play
       data_values: "${steps.value_gate.output.value}"
       dry_run: true
       # ALL is deliberate here and only here: a rehearsal that quietly tolerates bad rows
@@ -225,7 +220,7 @@ steps:
     block: dhis2.data_value_set_import
     depends_on: [rehearse]
     config:
-      connection: dhis2-demo
+      connection: dhis2-play
       # The same document the rehearsal was given, from the same waypoint. Rebuilding it
       # here would mean the thing that was validated and the thing that is written are two
       # different objects that merely ought to agree.
@@ -240,7 +235,7 @@ steps:
     deadline: 72h
     on_timeout: skip
     config:
-      connection: dhis2-demo
+      connection: dhis2-play
       data_set: "${params.data_set}"
       # The most recent period the pull covered -- the source lists newest first -- read
       # back off the checked document rather than named a second time: a period written

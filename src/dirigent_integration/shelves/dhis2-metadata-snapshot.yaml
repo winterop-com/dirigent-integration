@@ -50,17 +50,8 @@ requires:
     - transform.jq
     - storage.write
     - pipeline.run
-
-# The public DHIS2 play server, carried inline so this document runs standalone. An instance
-# you own names a connection it holds instead.
-connections:
-  dhis2-demo:
-    kind: dhis2
-    config:
-      base_url: https://play.dhis2.org/2.43
-      basic_username: admin
-      basic_password: district
-      timeout: 60s
+  connections:
+    - dhis2-play
 
 params:
   type: object
@@ -85,7 +76,7 @@ steps:
     block: dhis2.metadata
     for_each: ${params.resources}
     config:
-      connection: dhis2-demo
+      connection: dhis2-play
       resource: ${item}
       fields: ${params.fields}
       # Paging off: a snapshot wants the whole collection, and a half-read one is worse than

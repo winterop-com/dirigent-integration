@@ -7,6 +7,7 @@ validates against that whole.
 
 import re
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -14,7 +15,7 @@ from dirigent_client.schemas.catalog import Catalog
 from dirigent_core.documents import load_text, validate_against_catalog
 from dirigent_core.plugins import PluginHost
 
-from run_integration import connection_body_issues
+from run_integration import PLAY_BASE_URL, PLAY_CONNECTION, connection_body_issues, play_connections
 
 ROOT = Path(__file__).resolve().parents[1]
 INTEGRATION_EXAMPLES = ROOT / "examples"
@@ -144,7 +145,8 @@ def test_a_cross_boundary_example_validates_against_the_merged_catalog(
     catalog: Catalog, host: PluginHost, path: Path
 ) -> None:
     definition = load_text(path.read_text())
-    issues = validate_against_catalog(definition, catalog, check_blocks=True, blocks=host.blocks)
+    held = set(getattr(definition, "connections", {})) | set(play_connections())
+    issues = validate_against_catalog(definition, catalog, connections=held, check_blocks=True, blocks=host.blocks)
     assert not issues, f"{path.name}: " + "; ".join(str(issue) for issue in issues)
 
 
@@ -165,19 +167,17 @@ code: stale-connection-body
 description: A dhis2 connection carrying a field the kind no longer has.
 
 connections:
-  dhis2-demo:
+  dhis2-play:
     kind: dhis2
     config:
       base_url: https://play.im.dhis2.org/stable-2-43-2
-      basic_username: admin
-      basic_password: district
       timeout_seconds: 60
 
 steps:
   read_org_units:
     block: dhis2.metadata
     config:
-      connection: dhis2-demo
+      connection: dhis2-play
       resource: organisationUnits
 """
 
@@ -190,13 +190,28 @@ def test_a_stale_connection_body_passes_the_catalog_check(catalog: Catalog, host
 def test_a_stale_connection_body_is_refused(host: PluginHost) -> None:
     definition = load_text(STALE_CONNECTION_BODY)
     issues = connection_body_issues(definition, host)
-    assert issues == ["connections.dhis2-demo.config.timeout_seconds: Extra inputs are not permitted"]
+    assert issues == ["connections.dhis2-play.config.timeout_seconds: Extra inputs are not permitted"]
+
+
+def test_a_carried_secret_is_refused(host: PluginHost) -> None:
+    config = {"base_url": PLAY_BASE_URL, "basic_username": "someone", "basic_password": "not-in-a-document"}
+    carried = SimpleNamespace(kind="dhis2", config=config)
+    issues = connection_body_issues(SimpleNamespace(connections={"dhis2-play": carried}), host)
+    assert issues == [
+        "connections.dhis2-play.config.basic_password: a document carries no secret; "
+        "name the connection under requires.connections"
+    ]
+
+
+def test_the_play_connection_the_harness_creates_fits_its_kind(host: PluginHost) -> None:
+    for connection in play_connections().values():
+        host.connection_kinds[connection["kind"]].config_model.model_validate(connection["config"])
 
 
 def test_a_connection_of_an_uninstalled_kind_is_refused(host: PluginHost) -> None:
     definition = load_text(STALE_CONNECTION_BODY.replace("kind: dhis2\n", "kind: nowhere\n"))
     assert connection_body_issues(definition, host) == [
-        "connections.dhis2-demo.kind: no installed pack contributes a 'nowhere' connection"
+        "connections.dhis2-play.kind: no installed pack contributes a 'nowhere' connection"
     ]
 
 
@@ -207,8 +222,11 @@ def test_a_cross_boundary_example_spans_more_than_one_pack(catalog: Catalog, pat
     plugins = {pack_of(entry.plugin) for block in used if (entry := catalog.block(block)) is not None}
     # A pack is spanned by the connection kinds it contributes as much as by its blocks: a
     # document that reaches DHIS2 through http.request on a dhis2 connection crosses into
-    # the dhis2 pack, since only that pack makes the connection exist.
+    # the dhis2 pack, since only that pack makes the connection exist. The play connection is
+    # named rather than carried, and its kind is dhis2.
     kinds = {connection.get("kind") for connection in definition.get("connections", {}).values()}
+    if PLAY_CONNECTION in definition.get("requires", {}).get("connections", []):
+        kinds.add("dhis2")
     owners = {entry.id: pack_of(entry.plugin) for entry in catalog.connection_kinds}
     plugins |= {owners[kind] for kind in kinds if kind in owners}
     assert len(plugins) > 1, (

@@ -15,7 +15,7 @@
 #
 # Which connection backs s3:// is an instance setting (storage_connections: {s3: <code>}).
 #
-#   dg run --local examples/dhis2-values-to-parquet.yaml
+#   dg run --local examples/dhis2-values-to-parquet.yaml --connections play.yaml
 
 format: dirigent/v1
 kind: pipeline
@@ -33,21 +33,14 @@ requires:
     - dhis2.data_value_set_export
     - storage.write
     - convert.arrow
-
-connections:
-  dhis2-demo:
-    kind: dhis2
-    config:
-      base_url: https://play.dhis2.org/2.43
-      basic_username: admin
-      basic_password: district
-      timeout: 60s
+  connections:
+    - dhis2-play
 
 steps:
   export:
     block: dhis2.data_value_set_export
     config:
-      connection: dhis2-demo
+      connection: dhis2-play
       data_set: BfMAe6Itzgt
       period: "202507"
       org_unit: vSbt6cezomG

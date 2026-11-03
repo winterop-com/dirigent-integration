@@ -34,7 +34,7 @@
 # the month is signed off against. The s3:// scheme needs an s3 connection bound to it as
 # an instance setting (storage_connections: {s3: <code>}).
 #
-#   dg run --local examples/inbound/parquet-lakehouse-to-dhis2.yaml -p period=202606
+#   dg run --local examples/inbound/parquet-lakehouse-to-dhis2.yaml --connections play.yaml -p period=202606
 
 format: dirigent/v1
 kind: pipeline
@@ -58,15 +58,8 @@ requires:
     - dhis2.data_set_complete
   storage:
     - s3
-
-connections:
-  dhis2-demo:
-    kind: dhis2
-    config:
-      base_url: https://play.dhis2.org/2.43
-      basic_username: admin
-      basic_password: district
-      timeout: 60s
+  connections:
+    - dhis2-play
 
 params:
   type: object
@@ -137,7 +130,7 @@ steps:
     block: dhis2.data_value_set_import
     depends_on: [aggregate]
     config:
-      connection: dhis2-demo
+      connection: dhis2-play
       data_values: "${steps.aggregate.output.value}"
       dry_run: "${params.dry_run}"
       # The warehouse is the source of truth for these figures, so a re-run of the same
@@ -155,7 +148,7 @@ steps:
     deadline: 72h
     on_timeout: skip
     config:
-      connection: dhis2-demo
+      connection: dhis2-play
       data_set: "${params.data_set}"
       period: "${params.period}"
       org_unit: "${params.org_unit}"

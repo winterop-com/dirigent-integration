@@ -57,8 +57,8 @@
 # That is a real lookup against a real identifier crosswalk, and
 # fhir-patient-to-tracked-entity.yaml is the half that does it; here the entity and its enrollment are parameters.
 #
-#   dg run --local examples/fhir/fhir-encounter-to-event.yaml
-#   dg run --local examples/fhir/fhir-encounter-to-event.yaml -p encounter_id=137202491
+#   dg run --local examples/fhir/fhir-encounter-to-event.yaml --connections play.yaml
+#   dg run --local examples/fhir/fhir-encounter-to-event.yaml --connections play.yaml -p encounter_id=137202491
 
 format: dirigent/v1
 kind: pipeline
@@ -83,6 +83,8 @@ requires:
   blocks:
     - http.request
     - transform.jq
+  connections:
+    - dhis2-play
 
 connections:
   # A public FHIR R4 sandbox, open and unauthenticated, standing in for a hospital's own
@@ -91,13 +93,6 @@ connections:
     kind: http
     config:
       base_url: https://hapi.fhir.org/baseR4
-      timeout: 60s
-  dhis2-demo:
-    kind: dhis2
-    config:
-      base_url: https://play.dhis2.org/2.43
-      basic_username: admin
-      basic_password: district
       timeout: 60s
 
 params:
@@ -223,7 +218,7 @@ steps:
     block: http.request
     depends_on: [fold_to_event]
     config:
-      connection: dhis2-demo
+      connection: dhis2-play
       path: /api/tracker
       method: POST
       query:

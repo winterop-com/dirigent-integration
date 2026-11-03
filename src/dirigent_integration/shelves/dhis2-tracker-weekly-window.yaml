@@ -37,7 +37,7 @@
 # cadence computes it -- so an ad hoc run has to be handed one, and a run carrying no window
 # refuses the reference rather than quietly asking DHIS2 for everything it has:
 #
-#   dg run --local examples/dhis2-tracker-weekly-window.yaml --window 2026-06-01..2026-06-08
+#   dg run --local examples/dhis2-tracker-weekly-window.yaml --connections play.yaml --window 2026-06-01..2026-06-08
 #   dg apply examples/dhis2-tracker-weekly-window.yaml
 #   dg backfill dhis2-tracker-weekly-window --schedule weekly \
 #       --from 2026-01-05T03:00:00Z --to 2026-03-02T03:00:00Z --dry-run
@@ -58,17 +58,8 @@ requires:
     - convert.std
     - convert.arrow
     - storage.copy
-
-# The public DHIS2 play server, carried inline so this document runs standalone. An instance
-# you own names a connection it holds instead.
-connections:
-  dhis2-demo:
-    kind: dhis2
-    config:
-      base_url: https://play.dhis2.org/2.43
-      basic_username: admin
-      basic_password: district
-      timeout: 60s
+  connections:
+    - dhis2-play
 
 params:
   type: object
@@ -89,7 +80,7 @@ steps:
     block: dhis2.tracker
     timeout: 30m
     config:
-      connection: dhis2-demo
+      connection: dhis2-play
       kind: events
       program: ${params.program}
       org_unit: ${params.org_unit}

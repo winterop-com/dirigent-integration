@@ -64,8 +64,8 @@
 # write, keyed by (data set, period, org unit, attribute option combo), and it must follow the
 # values rather than accompany them.
 #
-#   dg run --local examples/fhir/fhir-capture-bundle-to-data-values.yaml
-#   dg run --local examples/fhir/fhir-capture-bundle-to-data-values.yaml -p page_size=10
+#   dg run --local examples/fhir/fhir-capture-bundle-to-data-values.yaml --connections play.yaml
+#   dg run --local examples/fhir/fhir-capture-bundle-to-data-values.yaml --connections play.yaml -p page_size=10
 
 format: dirigent/v1
 kind: pipeline
@@ -92,6 +92,8 @@ requires:
     - transform.jq
     - validate.schema
     - dhis2.data_value_set_import
+  connections:
+    - dhis2-play
 
 connections:
   # The facade. It takes no credential in the default single-user setup, so the connection
@@ -101,16 +103,6 @@ connections:
     config:
       base_url: http://localhost:8095
       timeout: 30s
-  # The instance the values land in. This is the demo, which is for reading: both imports below
-  # are dry runs against it, and repointing this connection and setting commit_dry_run to false
-  # is what makes the real one real.
-  dhis2-demo:
-    kind: dhis2
-    config:
-      base_url: https://play.dhis2.org/2.43
-      basic_username: admin
-      basic_password: district
-      timeout: 60s
 
 params:
   type: object
@@ -217,7 +209,7 @@ steps:
     block: dhis2.data_value_set_import
     depends_on: [gate]
     config:
-      connection: dhis2-demo
+      connection: dhis2-play
       data_values: "${steps.gate.output.value}"
       dry_run: true
       # ALL means one refused value refuses the whole document, which is what a rehearsal
@@ -231,7 +223,7 @@ steps:
     block: dhis2.data_value_set_import
     depends_on: [rehearse]
     config:
-      connection: dhis2-demo
+      connection: dhis2-play
       data_values: "${steps.gate.output.value}"
       dry_run: "${params.commit_dry_run}"
       import_strategy: CREATE_AND_UPDATE

@@ -76,7 +76,7 @@
 # RUN IT BY HAND, here, with no server. No --input takes the source's sample, a whole
 # notification Bundle:
 #
-#   dg run --local examples/fhir/fhir-subscription-to-dhis2.yaml
+#   dg run --local examples/fhir/fhir-subscription-to-dhis2.yaml --connections play.yaml
 #
 # ON A SERVER, apply it, keep the token the apply printed, and deliver a notification the way
 # the FHIR server would:
@@ -112,15 +112,8 @@ requires:
   blocks:
     - transform.jq
     - dhis2.data_value_set_import
-
-connections:
-  dhis2-demo:
-    kind: dhis2
-    config:
-      base_url: https://play.dhis2.org/2.43
-      basic_username: admin
-      basic_password: district
-      timeout: 60s
+  connections:
+    - dhis2-play
 
 steps:
   notified:
@@ -229,7 +222,7 @@ steps:
       max_attempts: 3
       backoff: 5s
     config:
-      connection: dhis2-demo
+      connection: dhis2-play
       data_values: "${steps.translate.output.value}"
       dry_run: true
       atomic_mode: ALL
