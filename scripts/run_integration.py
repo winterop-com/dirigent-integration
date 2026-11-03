@@ -227,12 +227,13 @@ def example_documents(directory: Path) -> list[Path]:
     return sorted(directory.rglob("*.yaml"))
 
 
-def referenced_connections(path: Path) -> set[str]:
+def referenced_connections(path: Path) -> dict[str, str | None]:
     """Every connection code a document names, whether it carries it or expects the instance to.
 
     A pack example may reference an instance-level connection it does not declare. The merged
     catalog is about the blocks and kinds each pack contributes, not about what connections an
-    instance holds, so a check against the catalog treats a named connection as satisfied.
+    instance holds, so a check against the catalog treats a named connection as satisfied, of a
+    kind it does not know. A connection the document carries is still checked by its own kind.
     """
     definition = yaml.safe_load(path.read_text()) or {}
     codes = set(definition.get("connections", {}))
@@ -241,7 +242,7 @@ def referenced_connections(path: Path) -> set[str]:
         code = step.get("config", {}).get("connection")
         if isinstance(code, str):
             codes.add(code)
-    return codes
+    return dict.fromkeys(codes)
 
 
 def connection_body_issues(definition: Any, host: PluginHost) -> list[str]:
