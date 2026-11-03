@@ -2,18 +2,20 @@
 #
 # DHIS2 answers /api/analytics with a grid: a `headers` list naming the columns, a `rows` list
 # of positional arrays, and a `metaData` block holding the display names for every uid that
-# appears. That is a good wire format and a poor report -- nothing outside DHIS2 knows that
-# column 2 is the value -- so the middle of this pipeline is the reshaping, and it is the part
-# worth reading. Three packs meet here: dhis2 for the query, builtin for the jq, the csv codec
+# appears. The block hands the rows on as objects keyed by header name, so nothing here needs
+# to know that column 2 is the value, and keeps the raw grid beside them for its metaData. A
+# row of uids is still a poor report, so the middle of this pipeline is the reshaping, and it
+# is the part worth reading. Three packs meet here: dhis2 for the query, builtin for the jq, the csv codec
 # and the webhook, storage-s3 for where the report lands.
 #
 # What happens, hop by hop:
 #
 #   query     dhis2.analytics_query, aggregate mode, broken down by indicator and period with
-#             the org unit fixed as a filter. The grid comes back as `body`, a value.
-#   rows      the grid becomes a list of flat objects, one per grid row, with the uids
-#             resolved to names out of metaData: {indicator, period, value}. That is the
-#             shape a csv has, and the grid is not.
+#             the org unit fixed as a filter. The rows come back as `rows`, objects keyed
+#             by header name, and the raw grid as `body`.
+#   rows      each row becomes a flat object with its uids resolved to names out of the
+#             grid's metaData: {indicator, period, value}. That is the shape a csv has, and
+#             a row of uids is not.
 #   staged    storage.write, that value as one json object. A converter reads one URI and
 #             writes another, so a value the run is holding is put down before it is
 #             re-encoded -- and that write is the only door a value leaves a run by.
@@ -110,21 +112,19 @@ steps:
     block: transform.jq
     depends_on: [query]
     config:
-      input: ${steps.query.output.body}
-      # The grid is positional, so the column positions are looked up by header name rather
-      # than hard-coded: DHIS2 has moved them between versions. metaData.items maps every uid
-      # in the answer to its display name, which is what turns dx:Uvn6LCg7dVU into a label.
+      input:
+        rows: ${steps.query.output.rows}
+        names: ${steps.query.output.body.metaData.items}
+      # Each row is keyed by its header's name, so dx, pe and value are read by name. The
+      # grid's metaData.items maps every uid in the answer to its display name, which is what
+      # turns dx:Uvn6LCg7dVU into a label.
       program: |
-        . as $grid
-        | ([$grid.headers[].name] | index("dx")) as $dx
-        | ([$grid.headers[].name] | index("pe")) as $pe
-        | ([$grid.headers[].name] | index("value")) as $value
-        | $grid.metaData.items as $names
-        | [ $grid.rows[]
+        .names as $names
+        | [ .rows[]
           | {
-              indicator: ($names[.[$dx]].name // .[$dx]),
-              period: ($names[.[$pe]].name // .[$pe]),
-              value: .[$value]
+              indicator: ($names[.dx].name // .dx),
+              period: ($names[.pe].name // .pe),
+              value: .value
             }
           ]
 

@@ -11,8 +11,8 @@
 #
 #   collections  one dhis2.metadata read per resource named in params. The block resolves the
 #                instance's version on connect and reads through that version's accessor, so
-#                the same document reads a 2.42 or a 2.43 instance unchanged. Each answer is
-#                the collection under its own key: {"dataElements": [...]}.
+#                the same document reads a 2.42 or a 2.43 instance unchanged. Each answer
+#                holds the collection's objects as `rows`.
 #   snapshot     the fan-out read back as one list and zipped against the resource names into a
 #                single document, {"dataElements": [...], "organisationUnits": [...]}.
 #   store        storage.write, that document as one object in s3. A jq step hands on a value
@@ -104,9 +104,9 @@ steps:
       # `items: continue` -- a tolerated failure would drop an element and silently shift
       # every collection one name to the left.
       program: |
-        [.resources, [.pages[].body]]
+        [.resources, [.pages[].rows]]
         | transpose
-        | map({(.[0]): (.[1][.[0]] // [])})
+        | map({(.[0]): (.[1] // [])})
         | add
 
   store:
@@ -124,9 +124,9 @@ steps:
         resources: ${params.resources}
         pages: ${steps.collections.output}
       program: |
-        [.resources, [.pages[].body]]
+        [.resources, [.pages[].rows]]
         | transpose
-        | map({resource: .[0], rows: ((.[1][.[0]] // []) | length)})
+        | map({resource: .[0], rows: ((.[1] // []) | length)})
 
   then_export:
     block: pipeline.run

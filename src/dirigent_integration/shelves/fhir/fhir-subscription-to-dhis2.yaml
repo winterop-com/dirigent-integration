@@ -248,5 +248,5 @@ steps:
          period: .document.period,
          org_unit: .document.orgUnit,
          status: .summary.status,
-         would_import: .summary.imported,
+         would_import: .summary.counts.imported,
          conflicts: (.summary.conflicts | length)}

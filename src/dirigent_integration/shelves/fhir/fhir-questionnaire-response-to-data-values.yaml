@@ -184,7 +184,7 @@ steps:
         unmapped: "${steps.translate.output.value.unmapped}"
       program: |
         {rehearsed: .summary.status,
-         would_import: .summary.imported,
-         would_update: .summary.updated,
+         would_import: .summary.counts.imported,
+         would_update: .summary.counts.updated,
          conflicts: (.summary.conflicts | length),
          unmapped_link_ids: .unmapped}
