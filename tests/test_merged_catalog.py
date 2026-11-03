@@ -145,7 +145,9 @@ def test_a_cross_boundary_example_validates_against_the_merged_catalog(
     catalog: Catalog, host: PluginHost, path: Path
 ) -> None:
     definition = load_text(path.read_text())
-    held = set(getattr(definition, "connections", {})) | set(play_connections())
+    carried = getattr(definition, "connections", {}) or {}
+    held: dict[str, str | None] = {code: getattr(spec, "kind", None) for code, spec in carried.items()}
+    held |= {code: spec["kind"] for code, spec in play_connections().items()}
     issues = validate_against_catalog(definition, catalog, connections=held, check_blocks=True, blocks=host.blocks)
     assert not issues, f"{path.name}: " + "; ".join(str(issue) for issue in issues)
 
