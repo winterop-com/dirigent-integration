@@ -188,9 +188,9 @@ steps:
            facilities_asked: (.asked | length),
            facilities_answered: ($codes | length),
            missing: [.asked[] | select(.code as $c | $codes | index($c) | not) | .code],
-           imported: .summary.imported,
-           updated: .summary.updated,
-           ignored: .summary.ignored,
+           imported: .summary.counts.imported,
+           updated: .summary.counts.updated,
+           ignored: .summary.counts.ignored,
            conflicts: (.summary.conflicts | length)}
 
   # A collection run nobody reads is a collection run nobody trusts. The body is the

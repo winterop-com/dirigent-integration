@@ -12,8 +12,8 @@
 # What happens, hop by hop:
 #
 #   read      dhis2.tracker, kind: events, scoped to a programme and an org unit subtree, with
-#             updated_after set to the window's start. DHIS2 answers a page: the objects under
-#             `instances` and a `page` block beside them.
+#             updated_after set to the window's start. The block answers a page: the objects
+#             as `rows` and a `pager` beside them.
 #   in_window the upper bound. DHIS2's tracker read takes updated_after and nothing that means
 #             updated_before, so the open end of the window is applied here instead. Without
 #             it, an event edited while the run was in flight would be collected twice: once by
@@ -107,7 +107,7 @@ steps:
     depends_on: [read]
     config:
       input:
-        events: ${steps.read.output.body.instances}
+        events: ${steps.read.output.rows}
         until: ${run.window.end}
       # Half-open: >= start came from DHIS2, < end is applied here. Both ends written out is
       # what stops an event that was edited during the run being collected twice.

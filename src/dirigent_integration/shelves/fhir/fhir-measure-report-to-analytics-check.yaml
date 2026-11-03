@@ -29,13 +29,11 @@
 #                 {"code": {"coding": [{"code": "numerator"}]}, "count": 3}],
 #               "measureScore": {"value": 0.75}}]}
 #
-# WHAT ARRIVES -- the grid. DHIS2 analytics answers a grid, not objects: `headers` names the
-# columns and `rows` is a list of lists, so a value is read by finding its header's index.
-# That indirection is the one awkward thing about analytics and it is why the jq below looks
-# up `value` rather than indexing a fixed position.
+# WHAT ARRIVES -- the rows. DHIS2 analytics answers a grid of positional lists; the block hands
+# its rows on as objects keyed by header name, so the jq below reads `value` by name and never
+# by position:
 #
-#   {"headers": [{"name": "dx"}, {"name": "pe"}, {"name": "ou"}, {"name": "value"}],
-#    "rows": [["fbfJHSPpUQD", "202608", "ImspTQPwCqd", "0.71"]]}
+#   [{"dx": "fbfJHSPpUQD", "pe": "202608", "ou": "ImspTQPwCqd", "value": "0.71"}]
 #
 # WHAT LEAVES. One discrepancy record, POSTed whether or not it found a gap, because "we
 # checked and they agree" is a fact worth delivering too:
@@ -163,7 +161,7 @@ steps:
         - "dx:${params.indicator}"
         - "pe:${params.period}"
       # A dimension the answer is not broken down BY, only filtered to. Putting ou here rather
-      # than in dimension is what makes the grid one row instead of one row per unit.
+      # than in dimension is what makes the answer one row instead of one row per unit.
       filter:
         - "ou:${params.org_unit}"
 
@@ -175,20 +173,16 @@ steps:
     config:
       input:
         reports: "${steps.read_report.output.body}"
-        grid: "${steps.read_analytics.output.body}"
+        rows: "${steps.read_analytics.output.rows}"
         measure: "${params.measure_url}"
         period: "${params.period}"
         org_unit: "${params.org_unit}"
         tolerance: "${params.tolerance}"
       program: |
-        . as {$reports, $grid, $measure, $period, $org_unit, $tolerance}
+        . as {$reports, $rows, $measure, $period, $org_unit, $tolerance}
         | (($reports.entry // [])[0].resource) as $report
         | ($report.group[0].measureScore.value) as $score
-        # The grid's columns are named in headers, so the value column is found by name and
-        # never by position: DHIS2 adds columns, and a fixed index would start reading one.
-        | ([($grid.headers // []) | to_entries[] | select(.value.name == "value") | .key][0]) as $col
-        | (if $col == null then null
-           else [($grid.rows // [])[] | .[$col] | tonumber?][0] end) as $value
+        | ([($rows // [])[] | .value | tonumber?][0]) as $value
         | {measure: $measure,
            period: $period,
            org_unit: $org_unit,
