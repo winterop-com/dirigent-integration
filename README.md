@@ -213,14 +213,16 @@ carries no bundle, because its `static/` is gitignored there), a uv stage that r
 `uv sync --locked --no-dev`, and a runtime stage that mirrors the runtime stage of dirigent's
 own `infra/Dockerfile` and must move with it.
 
-The build clones the components over public HTTPS and needs no credentials. A component
-repository that is private needs a GitHub read token instead; it goes in as a BuildKit secret
-and is exposed to git only inside the one `RUN` that needs it, so it never lands in a layer or
-a config file.
+The build clones the components over public HTTPS, but the UI bundle needs a GitHub token:
+dirigent's UI installs its `@winterop-com` packages from GitHub Packages, which asks for one
+even to read a public package. It goes in as a BuildKit secret, exposed only inside the `RUN`
+steps that need it (the clone, for a private component repository, and the UI install), so it
+never lands in a layer or a config file. `make image` and `make up` take the signed-in `gh`
+CLI's token when `GITHUB_TOKEN` is unset.
 
 ```sh
-make image                             # public components, no token
-export GITHUB_TOKEN=$(gh auth token)   # only if a component repository is private
+make image                             # uses $(gh auth token) when GITHUB_TOKEN is unset
+export GITHUB_TOKEN=<a token>          # any token that can read packages, without gh
 ```
 
 ### Running the stack

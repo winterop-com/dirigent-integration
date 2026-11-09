@@ -8,9 +8,9 @@ name: dirigent-full
 #
 #   docker compose --project-directory . -f infra/compose.yaml up --build
 #
-# The build fetches the components over public HTTPS, so GITHUB_TOKEN may stay empty; it is
-# needed only when a component repository is private. To run an image built elsewhere, set
-# DIRIGENT_FULL_IMAGE to it and pass --no-build.
+# The build needs GITHUB_TOKEN: the UI's packages come from GitHub Packages, which asks for a
+# token even to read a public package (`make up` takes the gh CLI's). To run an image built
+# elsewhere, set DIRIGENT_FULL_IMAGE to it and pass --no-build.
 
 secrets:
   github_token:

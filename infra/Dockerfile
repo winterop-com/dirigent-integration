@@ -38,8 +38,11 @@ RUN --mount=type=secret,id=github_token \
     && git -C dirigent checkout --quiet FETCH_HEAD
 
 WORKDIR /src/dirigent/packages/dirigent-server/frontend
-RUN --mount=type=cache,target=/root/.bun/install/cache \
-    bun install --frozen-lockfile
+# The UI's @winterop-com packages come from GitHub Packages, which asks for a token even to
+# read a public package: the `github_token` secret, never written to a layer.
+RUN --mount=type=secret,id=github_token,required=true \
+    --mount=type=cache,target=/root/.bun/install/cache \
+    GITHUB_TOKEN="$(cat /run/secrets/github_token)" bun install --frozen-lockfile
 RUN bun run build
 
 
