@@ -76,9 +76,9 @@ lint:
 	$(UV) run ruff format --check .
 	$(UV) run mypy scripts tests
 
-# Build dirigent-full from this repo's pyproject and a freshly resolved lock. The components
-# are public, so GITHUB_TOKEN is optional: unset, the one gh is logged in with is used if gh is
-# there, and otherwise it stays empty. It reaches the build as a BuildKit secret.
+# Build dirigent-full from this repo's pyproject and a freshly resolved lock. GITHUB_TOKEN is
+# required: the UI's packages come from GitHub Packages, which asks for a token even to read.
+# Unset, the one gh is logged in with is used. It reaches the build as a BuildKit secret.
 image: lock
 	GITHUB_TOKEN="$${GITHUB_TOKEN:-$$(gh auth token 2>/dev/null || true)}" \
 	  DOCKER_BUILDKIT=1 docker build \
