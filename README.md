@@ -200,11 +200,14 @@ version with every guard on. Each names every block it needs and its DHIS2 conne
 ## The batteries-included image
 
 `dirigent-full` is dirigent with every official pack the manifest names, plus the web UI, in
-one image, built here with `make image` and not published. The published image is the core
-one, `ghcr.io/winterop-com/dirigent`, which carries no adapter: a deployment that wants a pack
-builds one layer on it (dirigent's operations guide, "The image"), and `dg init --template
-compose` writes that Dockerfile. This repository builds the assembled image because it is the
-one place the whole set is already resolved, and the stack below runs it.
+one image, built here with `make image`. A green nightly run of `ci.yaml` on main publishes it
+as `ghcr.io/winterop-com/dirigent-integration`, tagged `nightly` and with the UTC date
+(`YYYY-MM-DD`), built from the lock that run tested. It tracks main and is never a release.
+The released image is the core one, `ghcr.io/winterop-com/dirigent`, which carries no
+adapter: a deployment that wants a pack builds one layer on it (dirigent's operations guide,
+"The image"), and `dg init --template compose` writes that Dockerfile. This repository builds
+the assembled image because it is the one place the whole set is already resolved, and the
+stack below runs it.
 
 `infra/Dockerfile` builds it from this repository's `pyproject.toml` and `uv.lock` in four
 stages: a lock stage where `scripts/dirigent_rev.py` reads the dirigent commit out of the lock,
@@ -251,7 +254,10 @@ assembling anything.
 component's release or tag boundary only; nothing sends it today.
 
 The components are public, so the git dependencies uv resolves and the pack clones the runner
-makes need no credentials and the workflow needs no secret.
+makes need no credentials and the workflow needs no secret. When the integration is green on a
+scheduled or dispatched run on main, the `image` job builds the batteries-included image from
+the lock that run resolved and pushes it to `ghcr.io/winterop-com/dirigent-integration` as
+`nightly` and as the date, with the workflow's own `GITHUB_TOKEN`.
 
 ## Licence
 
