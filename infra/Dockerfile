@@ -61,7 +61,7 @@ WORKDIR /app
 
 # src/ comes along because this repository is itself a distribution: the plugin whose
 # examples() hook carries the cross-boundary shelves into the image.
-COPY pyproject.toml uv.lock README.md ./
+COPY pyproject.toml uv.lock README.md LICENSE ./
 COPY src ./src
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=secret,id=github_token \
@@ -86,6 +86,9 @@ FROM python:3.13-slim-bookworm@sha256:a881a81282cca8c57f97014867fa651def1b379903
 # daemon named by DOCKER_HOST -- ideally the worker's own (a dind sidecar over tcp+TLS). Mounting
 # the host's /var/run/docker.sock is the discouraged fallback; it grants this container root on
 # the host. ca-certificates stays for TLS to a tcp daemon.
+#
+# git and openssh-client are here for git.checkout, which shells out to git and, for an ssh
+# remote, to the ssh binary git runs.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl gnupg \
     && install -m 0755 -d /etc/apt/keyrings \
@@ -94,7 +97,8 @@ RUN apt-get update \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian bookworm stable" \
         > /etc/apt/sources.list.d/docker.list \
     && apt-get update \
-    && apt-get install -y --no-install-recommends docker-ce-cli docker-compose-plugin docker-buildx-plugin \
+    && apt-get install -y --no-install-recommends \
+        docker-ce-cli docker-compose-plugin docker-buildx-plugin git openssh-client \
     && apt-get purge -y curl gnupg \
     && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
@@ -109,15 +113,23 @@ ENV PATH="/app/.venv/bin:$PATH" \
     DIRIGENT_HOST=0.0.0.0 \
     DIRIGENT_PORT=3333 \
     DIRIGENT_LOG_FORMAT=json \
-    DIRIGENT_ARTIFACT_ROOT=file:///var/lib/dirigent/artifacts
+    DIRIGENT_ARTIFACT_ROOT=file:///var/lib/dirigent/artifacts \
+    DIRIGENT_WORK_ROOT=/var/lib/dirigent/work
 
 WORKDIR /app
 COPY --from=builder --chown=dirigent:dirigent /app /app
 
 # Without this a worker fails at the first step of the first run rather than at start.
-RUN mkdir -p /var/lib/dirigent/artifacts && chown -R dirigent:dirigent /var/lib/dirigent
+RUN mkdir -p /var/lib/dirigent/artifacts /var/lib/dirigent/work \
+    && chown -R dirigent:dirigent /var/lib/dirigent
 
 USER dirigent
+
+# duckdb's httpfs extension, which is what gives sql.query and sql.execute s3:// . It is
+# installed here, as the user that will run it -- duckdb resolves an extension from the
+# running user's own home -- so a step LOADs it rather than fetching a binary mid-run.
+RUN python -c "import duckdb; duckdb.connect().execute('INSTALL httpfs')"
+
 EXPOSE 3333
 
 ENTRYPOINT ["dg"]
