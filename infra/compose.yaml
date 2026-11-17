@@ -117,6 +117,12 @@ services:
     environment:
       <<: *dirigent-env
       DIRIGENT_WORKER_CONCURRENCY: ${DIRIGENT_WORKER_CONCURRENCY:-8}
+    # A list under the anchor is replaced, not merged, so the shared mounts are respelled here.
+    # The image owns /var/lib/dirigent/work, so the volume starts owned by the worker's user.
+    volumes:
+      - artifacts:/var/lib/dirigent/artifacts
+      - ./dirigent.yaml:/etc/dirigent/dirigent.yaml:ro
+      - work:/var/lib/dirigent/work
     stop_grace_period: 60s
     healthcheck:
       test: ["CMD", "dg", "system", "health", "worker"]
@@ -128,3 +134,5 @@ services:
 volumes:
   postgres:
   artifacts:
+  # The worker's own working files: checkouts, build contexts, scratch for shell and sql steps.
+  work:
